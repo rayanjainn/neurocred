@@ -23,7 +23,7 @@ Derived from bank statements or Account Aggregator (AA) framework.
 | timestamp           | ISO 8601 | Transaction execution time (temporal anchor for windows) |
 | amount              | float    | Signed INR amount |
 | merchant_name       | string   | Parsed merchant/payee |
-| merchant_category   | string   | NLP-classified category |
+| merchant_category   | string   | Semantic Category (AI-enriched via Tier 2 MiniLM) |
 | channel             | enum     | [BANK_TRANSFER, CARD, ATM, OTHER] |
 | balance_after       | float    | Running balance for liquidity checks |
 | reference_id        | string   | Bank-provided txn reference |
@@ -41,7 +41,7 @@ Adheres to NPCI-style real-time payloads.
 | amount              | float    | Signed INR |
 | direction           | enum     | [INBOUND, OUTBOUND] |
 | merchant_name       | string   | Parsed merchant |
-| merchant_category   | string   | NLP-classified |
+| merchant_category   | string   | Semantic Category (AI-enriched via Tier 2 MiniLM) |
 | txn_type            | enum     | [P2P, P2M, AUTOPAY] |
 | status              | enum     | [SUCCESS, FAILED_TECHNICAL, FAILED_FUNDS] |
 | source_provenance   | string   | e.g., "phonepe_export" or "upi_api" |
@@ -57,7 +57,7 @@ Core parsed fields only (regex + lightweight parser).
 | timestamp           | ISO 8601 | Alert / txn time |
 | amount              | float    | Parsed signed amount |
 | merchant_name       | string   | Extracted |
-| merchant_category   | string   | Classified |
+| merchant_category   | string   | Semantic Category (AI-enriched via Tier 2 MiniLM) |
 | alert_type          | enum     | [DEBIT_ALERT, CREDIT_ALERT, UPI_ALERT, EMI_ALERT] |
 | source_provenance   | string   | "sms_parser" |
 
@@ -88,7 +88,7 @@ From Account Aggregator framework.
 | timestamp           | ISO 8601 | Aggregated txn time |
 | amount              | float    | Signed |
 | merchant_name       | string   | Standardized |
-| merchant_category   | string   | Classified |
+| merchant_category   | string   | Semantic Category (AI-enriched via Tier 2 MiniLM) |
 | balance             | float    | Snapshot balance |
 | account_type        | enum     | [SAVINGS, CURRENT, LOAN, CREDIT_CARD] |
 | source_provenance   | string   | "aa_framework_consent" |

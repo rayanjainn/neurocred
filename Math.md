@@ -11,10 +11,18 @@ Every raw event from any source is normalized into the canonical schema and assi
 - `type`: INCOME, EXPENSE_ESSENTIAL, EXPENSE_DISCRETIONARY, EMI_PAYMENT, SUBSCRIPTION, TRANSFER, INVESTMENT, REFUND, OTHER
 - `merchant_category`: GROCERY, TRANSPORT, DINING, HEALTHCARE, ENTERTAINMENT, BILLS_UTILITIES, EMI, SUBSCRIPTION, etc.
 
-**Classification Method** (lightweight & real-time):
-- Hybrid: Rule-based + regex for obvious cases (e.g., salary credit → INCOME, EMI keyword → EMI_PAYMENT)
-- Primary: Lightweight embedded NLP using sentence-transformers embeddings + cosine similarity / KNN on `merchant_name`
-- Output becomes the typed event fed into Redis Streams and the Polars feature engine
+**Classification Method** (Tier 2 Semantic Classifier):
+- **Core Engine**: `all-MiniLM-L6-v2` (Sentence-Transformers)
+- **Mathematical Logic**: Cosine Similarity against Category Anchors.
+- **Normalization**: Hybrid rule-based regex pre-filtering for high-confidence keywords (e.g., "SALARY", "LOAN").
+
+The semantic similarity between a merchant vector $v_m$ and a category anchor vector $v_c$ is defined as:
+
+$$
+\text{similarity}(v_m, v_c) = \frac{v_m \cdot v_c}{\|v_m\| \|v_c\|} = \frac{\sum_{i=1}^{n} v_{m,i} v_{c,i}}{\sqrt{\sum_{i=1}^{n} v_{m,i}^2} \sqrt{\sum_{i=1}^{n} v_{c,i}^2}}
+$$
+
+where $n = 384$ for the selected MiniLM model. The event is assigned the category $c$ that maximizes this score, provided it exceeds a confidence threshold $\tau \approx 0.7$.
 
 ### B. Sliding-Window Aggregation
 On every new event, real-time 7-day, 30-day, and 90-day summaries are updated (total income, essential expense, discretionary expense, net cashflow, category breakdown).

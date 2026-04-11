@@ -70,15 +70,10 @@ graph LR
 
 > **platform dna:** the core architecture is built around the "financial digital twin"—a temporal, versioned state layer that enables what-if simulations and deep narrative reasoning.
 
-| resource | link |
+| category | resources |
 |---|---|
-| mathematical foundations | [math.md](math.md) |
-| tools, libraries & alternatives | [tools.md](tools.md) |
-| behavioural signals | [signals.md](signals.md) |
-| digital twin state schema | [schema.md](schema.md) |
-| proactive agent logic | [intervention.md](intervention.md) |
-| api & worker architecture | [api.md](api.md) |
-| audit & dashboard | [frontend.md](frontend.md) |
+| **core foundations** | [mathematical foundations](Math.md), [technical schemas](Schema.md), [regulatory theory](Theory.md), [synthetic data strategy](Data.md) |
+| **tier summaries** | [t1: ingestion](tier1.md), [t2: nlp classifier](tier2.md), [t3: feature engine](tier3.md), [t4: digital twin](tier4.md), [t6: risk simulation](tier6.md) |
 
 ---
 

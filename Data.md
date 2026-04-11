@@ -1,4 +1,4 @@
-# howisthedatamade_f2.md — Agentic‑AI Financial Digital Twin & Cognitive Credit Engine
+# Agentic‑AI Financial Digital Twin & Cognitive Credit Engine
 Related Tiers: Tier 1 (Signal Ingestion), Tier 2 (Event Stream Processor), Tier 3 (Behavioural Feature Engine), Tier 9 (Anomaly & Deception Detection)
 
 **Table of contents**
@@ -102,9 +102,16 @@ All synthetic variables are governed by **probability‑density‑functions** an
 - **Step 3 – Agentic‑data‑sink**  
   Dump all streams into **Redis‑Streams** or **Kafka‑lite**‑style topics to simulate your real‑time‑ingestion‑layer, keeping the “empty‑pipeline‑with‑synthetic‑heartbeat” pattern from your old credit‑scoring‑PS. [web:55][web:61]
 
----
+### 3.4 Semantic Merchant Generation (Tier 2 Alignment)
 
-## 5. Target variables & real‑world transition strategy
+To validate the **Semantic Classifier (all-MiniLM-L6-v2)**, merchant names are NOT drawn from a fixed ID list but are generated using a **probabilistic semantic template engine**:
+- **Template**: `{Adjective/Brand} + {Category Keyword} + {Location/ID}`
+- **Examples**: 
+  - `DINING`: "Blue Tokai Coffee Gurgaon", "Royal Biryani House", "Zomato-Order-992"
+  - `GROCERIES`: "Reliance Fresh #44", "Mother Dairy Store", "Green Grocery Kirana"
+  - `SALARY`: "Tech Solutions Payroll Oct", "Monthly Remuneration Trans"
+
+This ensures that the Tier 2 engine must use its contextual embedding logic to recover the intended category from variations it has never seen before, exactly mirroring real-world bank narrative noise.
 
 ### 5.1 Non‑Linear Policy‑Distillation Model (Tier‑7‑aligned)
 
