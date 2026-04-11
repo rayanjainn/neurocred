@@ -1036,6 +1036,219 @@ async def abandon_interrogation(session_id: str) -> dict[str, Any]:
     }
 
 
+
+
+# ── Tier 9: Vigilance (Anomaly & Deception Detection) endpoints ───────────────
+
+@app.post("/vigilance/{user_id}/run")
+async def run_vigilance(user_id: str, body: dict[str, Any] = {}) -> dict[str, Any]:
+    """
+    Trigger a full Tier 9 vigilance run for a user.
+
+    Runs all 5 sub-modules in sequence:
+      - Fraud Ring & Cycle Detection (NetworkX)
+      - Social Engineering Defence (Bayesian SMS/voice analysis)
+      - Synthetic Identity & Bot Detector
+      - Hidden Financial Stress (logistic regression)
+      - Income Underreporting + Identity Shift detection
+
+    Optional body fields:
+      upi_events        — list of UPI transaction dicts
+      ewb_events        — list of E-Way Bill dicts
+      sms_texts         — list of {"text": "...", "sender_id": "..."} dicts
+      declared_income   — monthly INR from onboarding
+      cohort_mean_income / cohort_std_income — peer cohort stats
+      category_mix_30d / category_mix_90d    — spend fractions per category
+    """
+    from pathlib import Path
+    import polars as pl
+    from datetime import datetime
+    from src.features.schemas import BehaviouralFeatureVector as BFV
+    from src.vigilance.tier9 import run_tier9
+
+    redis: aioredis.Redis = app.state.redis
+
+    # Load features
+    raw = await redis.get(f"twin:features:{user_id}")
+    if raw:
+        feat_data = json.loads(raw)
+    else:
+        cache = Path(settings.features_path) / f"user_id={user_id}" / "features.parquet"
+        if not cache.exists():
+            raise HTTPException(status_code=404,
+                detail=f"No feature vector for user_id={user_id}.")
+        df = pl.read_parquet(cache)
+        if df.height == 0:
+            raise HTTPException(status_code=404, detail="Feature parquet is empty")
+        feat_data = df.row(0, named=True)
+        feat_data["user_id"] = user_id
+        feat_data.setdefault("computed_at", datetime.utcnow().isoformat())
+
+    # Type coercion
+    bool_fields = {"salary_day_spike_flag", "anomaly_flag"}
+    int_fields  = {"subscription_count_30d", "emi_payment_count_90d",
+                   "merchant_category_shift_count", "months_active_gst"}
+    for f in bool_fields:
+        if f in feat_data:
+            feat_data[f] = feat_data[f] in ("1", "True", "true", True, 1)
+    for f in int_fields:
+        if f in feat_data and feat_data[f] is not None:
+            try:
+                feat_data[f] = int(float(feat_data[f]))
+            except (ValueError, TypeError):
+                feat_data[f] = 0
+    for k, v in feat_data.items():
+        if isinstance(v, str) and v == "":
+            feat_data[k] = None
+
+    try:
+        fv = BFV(**{k: v for k, v in feat_data.items() if k in BFV.model_fields})
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Feature parse error: {exc}")
+
+    result = await run_tier9(
+        features=fv,
+        redis_client=redis,
+        upi_events=body.get("upi_events"),
+        ewb_events=body.get("ewb_events"),
+        sms_texts=body.get("sms_texts"),
+        declared_income=float(body.get("declared_income", 0.0)),
+        cohort_mean_income=float(body.get("cohort_mean_income", 0.0)),
+        cohort_std_income=float(body.get("cohort_std_income", 0.0)),
+        category_mix_30d=body.get("category_mix_30d"),
+        category_mix_90d=body.get("category_mix_90d"),
+    )
+
+    # Propagate key signals into the twin
+    twin_raw = await redis.get(f"twin:{user_id}")
+    if twin_raw:
+        twin_data = json.loads(twin_raw)
+        twin_data["fraud_ring_flag"]  = result.fraud_ring_flag
+        twin_data["deception_score"]  = result.deception_score
+        twin_data["vigilance_risk"]   = result.overall_risk_level.value
+        await redis.set(f"twin:{user_id}", json.dumps(twin_data, default=str))
+
+    return {
+        "user_id":          user_id,
+        "run_id":           result.run_id,
+        "deception_score":  result.deception_score,
+        "overall_risk":     result.overall_risk_level.value,
+        "fraud_ring_flag":  result.fraud_ring_flag,
+        "fraud_confidence": result.fraud_confidence,
+        "scam_probability": result.scam_probability,
+        "pagerank_score":   result.pagerank_score,
+        "bot_flag":         result.bot_detector.is_bot_flag,
+        "mule_flag":        result.bot_detector.is_mule_flag,
+        "stress_score":     result.stress_signal.stress_confidence_score,
+        "underreport_score": result.income_underreport.income_underreport_score,
+        "identity_shift_score": result.identity_shift.identity_shift_score,
+        "computed_at":      result.computed_at.isoformat(),
+    }
+
+
+@app.get("/vigilance/{user_id}/result")
+async def get_vigilance_result(user_id: str) -> dict[str, Any]:
+    """
+    Get the latest Tier 9 vigilance result for a user (cached 24h in Redis).
+    Returns the full Tier9Result including all module outputs.
+    """
+    from src.vigilance.tier9 import get_tier9_result
+
+    redis: aioredis.Redis = app.state.redis
+    result = await get_tier9_result(user_id, redis)
+    if not result:
+        raise HTTPException(status_code=404,
+            detail=f"No vigilance result for user_id={user_id}. "
+                   "Call POST /vigilance/{user_id}/run first.")
+    return result.model_dump()
+
+
+@app.get("/vigilance/{user_id}/summary")
+async def get_vigilance_summary(user_id: str) -> dict[str, Any]:
+    """
+    Lightweight vigilance summary for frontend dashboard cards.
+    Returns decision outputs and risk flags without full module details.
+    """
+    from src.vigilance.tier9 import get_tier9_result
+
+    redis: aioredis.Redis = app.state.redis
+    result = await get_tier9_result(user_id, redis)
+    if not result:
+        # Fall back to twin cache
+        twin_raw = await redis.get(f"twin:{user_id}")
+        if twin_raw:
+            twin_data = json.loads(twin_raw)
+            return {
+                "user_id": user_id,
+                "fraud_ring_flag": twin_data.get("fraud_ring_flag", False),
+                "deception_score": twin_data.get("deception_score", 0.0),
+                "overall_risk":    twin_data.get("vigilance_risk", "LOW"),
+                "source": "twin_cache",
+            }
+        raise HTTPException(status_code=404,
+            detail=f"No vigilance data for user_id={user_id}")
+
+    return {
+        "user_id":              user_id,
+        "deception_score":      result.deception_score,
+        "overall_risk":         result.overall_risk_level.value,
+        "fraud_ring_flag":      result.fraud_ring_flag,
+        "fraud_confidence":     result.fraud_confidence,
+        "scam_probability":     result.scam_probability,
+        "pagerank_score":       result.pagerank_score,
+        "is_shell_hub":         result.fraud_ring.is_shell_hub,
+        "bot_flag":             result.bot_detector.is_bot_flag,
+        "mule_flag":            result.bot_detector.is_mule_flag,
+        "stress_score":         result.stress_signal.stress_confidence_score,
+        "stress_trend":         result.stress_signal.cash_buffer_trend,
+        "underreport_score":    result.income_underreport.income_underreport_score,
+        "identity_shift_score": result.identity_shift.identity_shift_score,
+        "js_divergence":        result.identity_shift.js_divergence,
+        "computed_at":          result.computed_at.isoformat(),
+        "source":               "tier9_cache",
+    }
+
+
+@app.post("/vigilance/scam/analyze")
+async def analyze_scam(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Analyze a single SMS or voice transcript for social engineering signals.
+    Does NOT require a pre-computed feature vector.
+
+    Request body:
+      {"user_id": "u_0001", "text": "Your account will be blocked...", "sender_id": "TM-HDFCBK"}
+    """
+    from src.vigilance.scam_detector import run_scam_detector
+
+    user_id   = body.get("user_id", "anonymous")
+    text      = body.get("text", "")
+    sender_id = body.get("sender_id")
+
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    result = run_scam_detector(user_id=user_id, text=text, sender_id=sender_id)
+    return result.model_dump()
+
+
+@app.get("/vigilance/stream/status")
+async def vigilance_stream_status() -> dict[str, Any]:
+    """
+    Returns the current depth of the vigilance event stream and recent alert counts.
+    """
+    redis: aioredis.Redis = app.state.redis
+    try:
+        stream_len = await redis.xlen("stream:vigilance_events")
+    except Exception:
+        stream_len = -1
+
+    return {
+        "stream":       "stream:vigilance_events",
+        "stream_length": stream_len,
+        "status":       "ok",
+    }
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "src.api.main:app",
