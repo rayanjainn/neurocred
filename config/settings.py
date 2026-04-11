@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     models_path: str = "data/models"
 
     # Synthetic generator
-    n_profiles: int = 250
+    n_profiles: int = 100
     history_months: int = 12
 
     # Tier 2 classifier

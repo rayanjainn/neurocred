@@ -266,7 +266,7 @@ export default function DataExplorerPage() {
                           <TableBody>
                             {details.recent_upi.slice(0, 50).map((r, i) => (
                                <TableRow key={i}>
-                                  <TableCell className="text-xs text-slate-500 whitespace-nowrap">{r.timestamp.split(" ")[0]} {r.timestamp.split(" ")[1]?.substring(0,5)}</TableCell>
+                                  <TableCell className="text-xs text-slate-500 whitespace-nowrap">{(r.timestamp || "").split(" ")[0]} {(r.timestamp || "").split(" ")[1]?.substring(0,5)}</TableCell>
                                   <TableCell className="font-semibold text-slate-700">₹{r.amount.toLocaleString()}</TableCell>
                                   <TableCell>
                                     {r.direction === "INBOUND" ? 

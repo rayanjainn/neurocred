@@ -42,7 +42,7 @@ PROVENANCE_TO_STREAM = {
     "voice_stt_parser": settings.stream_voice,
 }
 
-BATCH_SIZE = 10_000
+BATCH_SIZE = 50_000
 
 
 def _serialise(ev: CanonicalEvent) -> dict[str, str]:
@@ -75,10 +75,10 @@ async def _ensure_groups(client: aioredis.Redis) -> None:
 
 
 async def produce(
-    n_profiles: int = settings.n_profiles,
-    history_months: int = settings.history_months,
+    n_profiles: int = 100,
+    history_months: int = 12,
     verbose: bool = True,
-    clear_existing: bool = True,
+    clear_existing: bool = False,
 ) -> int:
     """
     Generate synthetic events and publish to Redis Streams.
@@ -140,4 +140,6 @@ async def produce(
 
 
 if __name__ == "__main__":
-    asyncio.run(produce())
+    import sys
+    force = "--force" in sys.argv
+    asyncio.run(produce(clear_existing=force))
