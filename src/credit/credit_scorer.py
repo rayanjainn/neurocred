@@ -96,6 +96,9 @@ def _load_xgb_safe(path: str | Path) -> xgb.XGBClassifier:
     booster.load_config(json.dumps(cfg))
     clf = xgb.XGBClassifier()
     clf._Booster = booster
+    clf.n_classes_ = 2
+    # mock classes_ via __dict__ just in case SHAP accesses it directly
+    clf.__dict__["classes_"] = np.array([0, 1])
     return clf
 
 

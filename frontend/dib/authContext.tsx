@@ -5,10 +5,21 @@ import { authApi, notifApi } from "@/dib/api";
 
 export type Role =
   | "msme"
+  | "individual"
   | "loan_officer"
   | "credit_analyst"
   | "risk_manager"
   | "admin";
+
+export interface Account {
+  id: string;
+  accountNumber: string;
+  ifsc: string;
+  type: string;
+  currency?: string;
+  balance: number;
+  lastUpdated?: string;
+}
 
 export interface User {
   id: string;
@@ -18,6 +29,7 @@ export interface User {
   gstin?: string;
   bank_id?: string;
   status: string;
+  account?: Account;
 }
 
 interface LoginResult {

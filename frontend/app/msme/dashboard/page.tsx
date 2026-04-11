@@ -30,6 +30,9 @@ import {
   Loader2,
 } from "lucide-react";
 import { DigitalTwinCard } from "@/components/DigitalTwinCard";
+import { SimulationPanel } from "@/components/SimulationPanel";
+import { VigilanceReasoningCard } from "@/components/VigilanceReasoningCard";
+import { ProcessingWorkflow } from "@/components/ProcessingWorkflow";
 
 export default function MsmeDashboard() {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -66,18 +69,35 @@ export default function MsmeDashboard() {
     ["submitted", "permission_requested", "data_shared", "bank_reviewing"].includes(lr.status),
   );
 
-  if (status === "idle" || status === "pending" || status === "processing") {
+  const isCalculating = ["pending", "ingesting", "classifying", "extracting_features", "benchmarking", "scoring", "processing"].includes(status);
+
+  if (isCalculating) {
     return (
-      <div className="p-6 w-full max-w-[1400px] mx-auto">
+      <div className="p-6 w-full max-w-[1400px] mx-auto min-h-screen flex flex-col">
         <PageHeader
-          title={`Welcome back, ${user.name.split(" ")[0]}`}
-          description={`GSTIN: ${user.gstin} · Computing score…`}
+          title={`Initializing Data Twin for ${(user.name || "User").split(" ")[0]}...`}
+          description={`GSTIN: ${user.gstin} · Running autonomous credit pipeline`}
         />
-        <div className="flex flex-col items-center justify-center h-64 gap-4 text-muted-foreground">
-          <Loader2 className="w-10 h-10 animate-spin text-primary" />
-          <p className="text-sm">
-            {status === "processing" ? "Running ML pipeline…" : "Queuing score request…"}
-          </p>
+        <div className="flex-1 flex flex-col items-center justify-center">
+            <div className="w-full max-w-xl p-8 rounded-3xl border bg-card/50 backdrop-blur-xl shadow-2xl relative overflow-hidden gsap-card">
+                <div className="absolute top-0 left-0 w-full h-1 bg-muted">
+                    <div className="h-full bg-primary transition-all duration-500" style={{ width: (
+                        status === "ingesting" ? "20%" :
+                        status === "classifying" ? "40%" :
+                        status === "extracting_features" ? "60%" :
+                        status === "benchmarking" ? "80%" :
+                        status === "scoring" ? "95%" : "5%"
+                    ) }} />
+                </div>
+                <h3 className="text-xl font-bold mb-8 flex items-center gap-3">
+                    <Shield className="w-6 h-6 text-primary" />
+                    Calculating Credit Score
+                </h3>
+                <ProcessingWorkflow currentStatus={status} />
+            </div>
+            <p className="mt-8 text-sm text-muted-foreground animate-pulse tracking-wide uppercase">
+                Airavat Tier 4 Cognitive Engine Active
+            </p>
         </div>
       </div>
     );
@@ -87,7 +107,7 @@ export default function MsmeDashboard() {
     return (
       <div className="p-6 w-full max-w-[1400px] mx-auto">
         <PageHeader
-          title={`Welcome back, ${user.name.split(" ")[0]}`}
+          title={`Welcome back, ${(user.name || "User").split(" ")[0]}`}
           description={`GSTIN: ${user.gstin}`}
           actions={
             <Button variant="outline" size="sm" className="gap-2" onClick={refresh}>
@@ -108,8 +128,8 @@ export default function MsmeDashboard() {
     <div ref={containerRef} className="p-6 w-full max-w-[1400px] mx-auto">
       <div className="gsap-card opacity-0">
         <PageHeader
-          title={`Welcome back, ${user.name.split(" ")[0]}`}
-          description={`GSTIN: ${user.gstin} · Last scored: ${new Date(score.score_freshness).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}
+          title={`Welcome back, ${(user.name || "User").split(" ")[0]}`}
+          description={`GSTIN: ${user.gstin} · Last scored: ${score.score_freshness ? new Date(score.score_freshness).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }) : new Date(score.computed_at || Date.now()).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`}
           actions={
             <Button
               variant="outline"
@@ -127,11 +147,11 @@ export default function MsmeDashboard() {
 
       {/* Banners */}
       {score.data_maturity_months < 3 && (
-        <div className="mb-4 flex items-start gap-3 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 gsap-card opacity-0">
+        <div className="mb-4 flex items-start gap-3 p-4 bg-[rgba(255,170,0,0.08)] border border-[rgba(255,170,0,0.25)] rounded-xl text-[#FFAA00] gsap-card opacity-0">
           <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
           <div>
             <p className="font-semibold text-sm">Low Data Quality Warning</p>
-            <p className="text-sm">
+            <p className="text-sm text-[#E09500]">
               Your data maturity is only {score.data_maturity_months} months.
               Scores improve with more history.
             </p>
@@ -139,11 +159,11 @@ export default function MsmeDashboard() {
         </div>
       )}
       {score.fraud_flag && (
-        <div className="mb-4 flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl text-red-800 gsap-card opacity-0">
-          <Flag className="w-5 h-5 shrink-0 mt-0.5" />
+        <div className="mb-4 flex items-start gap-3 p-4 bg-[rgba(255,0,64,0.08)] border border-[rgba(255,0,64,0.25)] rounded-xl gsap-card opacity-0">
+          <Flag className="w-5 h-5 shrink-0 mt-0.5 text-[#FF0040]" />
           <div className="flex-1">
-            <p className="font-semibold text-sm">Fraud Alert</p>
-            <p className="text-sm">
+            <p className="font-semibold text-sm text-[#FF0040]">Fraud Alert</p>
+            <p className="text-sm text-[#E0003A]">
               Your GSTIN has been flagged as part of a suspicious transaction
               pattern. You can raise a dispute to review this.
             </p>
@@ -163,30 +183,36 @@ export default function MsmeDashboard() {
           <DigitalTwinCard score={score} />
         </div>
 
-        <Card className="xl:col-span-4 border-border shadow-sm gsap-card opacity-0">
-          <CardHeader className="py-3 px-4 border-b">
-            <CardTitle className="text-sm font-semibold">
-              Top Score Drivers
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4">
-            <ul className="space-y-2">
-              {score.top_reasons
-                .filter((r: string) => !r.startsWith("Path to Prime"))
-                .map((reason: string, i: number) => (
-                <li
-                  key={i}
-                  className="flex items-start gap-2 text-sm text-foreground"
-                >
-                  <span className="w-5 h-5 rounded-full bg-accent text-primary text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
-                    {i + 1}
-                  </span>
-                  {reason}
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+        <div className="xl:col-span-4 flex flex-col gap-4">
+          <Card className="border-border shadow-sm gsap-card opacity-0 h-full">
+            <CardHeader className="py-3 px-4 border-b">
+              <CardTitle className="text-sm font-semibold">
+                Top Score Drivers
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4">
+              <ul className="space-y-2">
+                {(score.top_reasons || [])
+                  .filter((r: string) => !r.startsWith("Path to Prime"))
+                  .map((reason: string, i: number) => (
+                  <li
+                    key={i}
+                    className="flex items-start gap-2 text-sm text-foreground"
+                  >
+                    <span className="w-5 h-5 rounded-full bg-accent text-primary text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                      {i + 1}
+                    </span>
+                    {reason}
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+          
+          <div className="gsap-card opacity-0 h-full">
+            <VigilanceReasoningCard userId={user.gstin ?? user.id} />
+          </div>
+        </div>
 
         <div className="xl:col-span-3 xl:row-span-3 flex flex-col gap-4">
           <Card className="border-border shadow-sm gsap-card opacity-0">
@@ -272,8 +298,9 @@ export default function MsmeDashboard() {
             <StatCard
               label="Category"
               value={
-                score.msme_category.charAt(0).toUpperCase() +
-                score.msme_category.slice(1)
+                score.msme_category 
+                  ? score.msme_category.charAt(0).toUpperCase() + score.msme_category.slice(1)
+                  : "Individual"
               }
               icon={TrendingUp}
             />
@@ -324,17 +351,17 @@ export default function MsmeDashboard() {
           </CardContent>
         </Card>
 
-        {score.top_reasons.some((r: string) => r.startsWith("Path to Prime")) && (
-          <Card className="xl:col-span-9 border-border shadow-sm gsap-card opacity-0 bg-primary/5 border-primary/20">
-            <CardHeader className="py-3 px-4 border-b border-primary/10">
-              <CardTitle className="text-sm font-semibold text-primary flex items-center gap-2">
+        {(score.top_reasons || []).some((r: string) => r.startsWith("Path to Prime")) && (
+          <Card className="xl:col-span-9 border-[rgba(200,255,0,0.15)] shadow-sm gsap-card opacity-0 bg-[rgba(200,255,0,0.04)]">
+            <CardHeader className="py-3 px-4 border-b border-[rgba(200,255,0,0.1)]">
+              <CardTitle className="text-sm font-semibold text-[#C8FF00] flex items-center gap-2">
                 <TrendingUp className="w-4 h-4" />
                 Path to Prime
               </CardTitle>
             </CardHeader>
             <CardContent className="p-4">
-              <p className="text-sm text-foreground/90 leading-relaxed">
-                {score.top_reasons
+              <p className="text-sm text-[#F0F0F0]/90 leading-relaxed">
+                {(score.top_reasons || [])
                   .find((r: string) => r.startsWith("Path to Prime"))
                   ?.replace("Path to Prime:", "")
                   .trim()}
@@ -342,6 +369,11 @@ export default function MsmeDashboard() {
             </CardContent>
           </Card>
         )}
+
+        {/* Tier 6 Risk Simulation Panel */}
+        <div className="xl:col-span-9 gsap-card opacity-0">
+          <SimulationPanel userId={user.gstin ?? user.id} score={score} />
+        </div>
       </div>
     </div>
   );

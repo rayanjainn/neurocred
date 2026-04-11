@@ -73,16 +73,17 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
     setResponse("");
 
     try {
-      const res = await fetch('/api/twin-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, dataContext })
+      const { twinApi } = await import("@/dib/api");
+      const userId = dataContext?.user_id ?? "unknown";
+      
+      const data: any = await twinApi.chat(userId, { 
+        message: text, 
+        dataContext 
       });
 
-      const data = await res.json();
       setIsProcessing(false);
 
-      const generatedResponse = data.reply || data.error || "Sorry, I am facing an issue right now connecting to Groq.";
+      const generatedResponse = data.reply || data.content || data.error || "Sorry, I am facing an issue right now connecting to the twin service.";
       setResponse(generatedResponse);
       speakResponse(generatedResponse);
 

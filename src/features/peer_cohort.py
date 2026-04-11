@@ -44,7 +44,7 @@ async def build_peer_cohorts() -> int:
     keys: list[str] = []
     cursor = 0
     while True:
-        cursor, batch = await client.scan(cursor, match="twin:features:*", count=500)
+        cursor, batch = await client.scan(cursor, match="twin:features:*", count=100)
         keys.extend(batch)
         if cursor == 0:
             break

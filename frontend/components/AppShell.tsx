@@ -59,6 +59,12 @@ const NAV_ITEMS: Record<
   string,
   { label: string; href: string; icon: React.ElementType }[]
 > = {
+  individual: [
+    { label: "Dashboard", href: "/individual/dashboard", icon: LayoutDashboard },
+    { label: "Financial Report", href: "/individual/report", icon: FileText },
+    { label: "Guard AI", href: "/individual/vigilance", icon: Shield },
+    { label: "My Digital Twin", href: "/individual/twin", icon: GitBranch },
+  ],
   msme: [
     { label: "Dashboard", href: "/msme/dashboard", icon: LayoutDashboard },
     { label: "Score Report", href: "/msme/score-report", icon: FileText },
@@ -66,6 +72,7 @@ const NAV_ITEMS: Record<
     { label: "Disputes", href: "/msme/disputes", icon: AlertTriangle },
     { label: "Reminders", href: "/msme/reminders", icon: Calendar },
     { label: "Strategy Lab", href: "/msme/strategy-lab", icon: Compass },
+    { label: "Business Twin", href: "/msme/twin", icon: GitBranch },
     { label: "Guide", href: "/msme/guide", icon: HelpCircle },
   ],
   loan_officer: [
@@ -76,16 +83,9 @@ const NAV_ITEMS: Record<
   credit_analyst: [
     { label: "SHAP Explorer", href: "/analyst/shap-explorer", icon: Search },
     { label: "Data Explorer", href: "/analyst/data-explorer", icon: Database },
-    {
-      label: "Signal Trends",
-      href: "/analyst/signal-trends",
-      icon: TrendingUp,
-    },
-    {
-      label: "Dispute Queue",
-      href: "/analyst/dispute-queue",
-      icon: AlertTriangle,
-    },
+    { label: "Entity Profile", href: "/analyst/entity-profile", icon: Users },
+    { label: "Signal Trends", href: "/analyst/signal-trends", icon: TrendingUp },
+    { label: "Dispute Queue", href: "/analyst/dispute-queue", icon: AlertTriangle },
     { label: "Strategy Lab", href: "/analyst/strategy-lab", icon: Compass },
   ],
   risk_manager: [
@@ -100,10 +100,13 @@ const NAV_ITEMS: Record<
     { label: "Users", href: "/admin/users", icon: Users },
     { label: "Banks", href: "/admin/banks", icon: Building2 },
     { label: "Audit Log", href: "/admin/audit-log", icon: ClipboardList },
+    { label: "Compliance T10", href: "/admin/compliance", icon: GitBranch },
   ],
+
 };
 
 const ROLE_LABELS: Record<string, string> = {
+  individual: "Individual",
   msme: "MSME Owner",
   loan_officer: "Loan Officer",
   credit_analyst: "Credit Analyst",

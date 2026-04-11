@@ -44,7 +44,7 @@ CREDIT_KEY      = "credit:user:{uid}"
 
 def _load_fv(user_id: str) -> BehaviouralFeatureVector | None:
     """Load BehaviouralFeatureVector from Tier 3 parquet cache."""
-    path = Path(settings.parquet_cache_path) / f"user_id={user_id}" / "features.parquet"
+    path = Path(settings.features_path) / f"user_id={user_id}" / "features.parquet"
     if not path.exists():
         return None
     df = pl.read_parquet(path)
@@ -65,7 +65,7 @@ def _load_fv(user_id: str) -> BehaviouralFeatureVector | None:
 def _load_demo_fv(user_id: str) -> BehaviouralFeatureVector | None:
     """Deterministic demo fallback — pick any cached user by hash."""
     import random
-    cache = Path(settings.parquet_cache_path)
+    cache = Path(settings.features_path)
     existing = sorted(cache.glob("user_id=*/features.parquet"))
     if not existing:
         return None

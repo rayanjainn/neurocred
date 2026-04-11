@@ -831,10 +831,10 @@ def _apply_isolation_forest(df: pl.DataFrame, cadence_cols: list[str]) -> pl.Dat
     if not existing or len(df) < 10:
         return df.with_columns(pl.lit(0).alias("temporal_anomaly_flag"))
 
-    X = df.select(existing).fill_null(0.0).to_numpy().astype(np.float32)
+    X = df.select(existing).cast(pl.Float32).fill_null(0.0).to_numpy().astype(np.float32)
     iso = IsolationForest(contamination=0.05, random_state=42)
     labels = iso.fit_predict(X)  # -1 = anomaly, 1 = normal
-    flags = (labels == -1).astype(np.int32)
+    flags = (labels == -1).astype(np.float32)
     return df.with_columns(pl.Series("temporal_anomaly_flag", flags))
 
 
@@ -992,6 +992,11 @@ def run_batch(
 def _flush_features(records: list[dict], features_dir: Path) -> None:
     """Write per-user feature rows to partitioned Parquet cache."""
     df = pl.DataFrame(records)
+    # Cast all float64 to float32 for parquet consistency
+    df = df.with_columns([pl.col(c).cast(pl.Float32) for c in df.columns if df[c].dtype == pl.Float64])
+    # Cast all bool to int32 for parquet consistency
+    df = df.with_columns([pl.col(c).cast(pl.Int32) for c in df.columns if df[c].dtype == pl.Boolean])
+
     for uid in df["user_id"].unique().to_list():
         slice_ = df.filter(pl.col("user_id") == uid)
         out_path = features_dir / f"user_id={uid}" / "features.parquet"

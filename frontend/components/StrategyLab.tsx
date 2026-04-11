@@ -75,25 +75,38 @@ function MSMEStrategyLab() {
   const [appliedStrategies, setAppliedStrategies] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (!user?.gstin) return;
-    fetch(`/api/strategy/${encodeURIComponent(user.gstin)}`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) => setStrategies(Array.isArray(data) ? data : []))
+    fetch(`/api/strategy/templates?role=${user?.role ?? "msme"}`)
+      .then((res) => (res.ok ? res.json() : { templates: [] }))
+      .then((data) => setStrategies(Array.isArray(data.templates) ? data.templates : []))
       .catch(() => setStrategies([]));
-  }, [user?.gstin]);
+  }, [user?.role]);
 
-  const handleSimulate = () => {
+  const handleSimulate = async () => {
     setIsSimulating(true);
     setResults(null);
-    setTimeout(() => {
-      const riskDelta = Math.floor(Math.random() * 20 - 10);
-      const savingsDelta = Math.floor(Math.random() * 15 + 5);
-      setResults({
-        risk: 65 + riskDelta,
-        savings: 20000 + savingsDelta * 1000,
+    try {
+      const res = await fetch("/api/strategy/simulate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: user?.id,
+          inputs: {
+            income_change_pct: incomeChange[0],
+            expense_change_pct: expenseChange[0],
+            savings_pct: savingsPct[0]
+          }
+        })
       });
+      const data = await res.json();
+      setResults({
+        risk: data.risk_score || 65,
+        savings: Array.isArray(data.net_worth_projection) ? data.net_worth_projection[0] : 20000,
+      });
+    } catch {
+      setResults({ risk: 65, savings: 20000 });
+    } finally {
       setIsSimulating(false);
-    }, 1200);
+    }
   };
 
   const applyStrategy = (strategy: any) => {
@@ -664,7 +677,7 @@ function CanvasStrategyLab({ user }: { user: any }) {
 
   const updateSelectedNode = (patch: Record<string, any>) => {
     if (!selectedNodeId) return;
-    setNodes((nds) =>
+    setNodes((nds: any[]) =>
       nds.map((n) =>
         n.id === selectedNodeId
           ? {
@@ -716,16 +729,22 @@ function CanvasStrategyLab({ user }: { user: any }) {
     if (!chatPrompt.trim()) return;
     try {
       setAiLoading(true);
-      const res = await fetch("/api/twin-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      setAiSuggestion("");
+      let fullText = "";
+
+      const { twinApi } = await import("@/dib/api");
+      await twinApi.streamChat(
+        user?.gstin || "unknown",
+        {
           message: `You are a financial strategy assistant. Convert this into a short strategy suggestion with concrete actions: ${chatPrompt}`,
-          dataContext: { role: user?.role || "credit_analyst", mode: "strategy_lab" },
-        }),
-      });
-      const data = await res.json();
-      setAiSuggestion(data?.reply || data?.error || "No suggestion generated.");
+        },
+        (chunk) => {
+          if (chunk.content) {
+            fullText += chunk.content;
+            setAiSuggestion(fullText);
+          }
+        }
+      );
     } catch {
       setAiSuggestion("Could not fetch AI suggestion right now.");
     } finally {
@@ -761,10 +780,17 @@ function CanvasStrategyLab({ user }: { user: any }) {
     try {
       setPushStatus("sending");
       setPushMessage("");
-      const res = await fetch("/api/strategy/add", {
+      const res = await fetch("/api/strategy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: gstin, strategy }),
+        body: JSON.stringify({ 
+          user_id: gstin, 
+          name: strategy.title,
+          role: user?.role || "analyst",
+          graph: { nodes: [], edges: [] },
+          last_simulation_id: "sim_test",
+          strategy_data: strategy 
+        }),
       });
       if (!res.ok) {
         const txt = await res.text().catch(() => "");
@@ -1245,18 +1271,20 @@ function CanvasStrategyLab({ user }: { user: any }) {
                     placeholder="Node label"
                   />
                   <textarea
-                    value={JSON.stringify(selectedNode.data?.params || {}, null, 0)}
-                    onChange={(e) => {
+                    defaultValue={JSON.stringify((selectedNode.data as any)?.params || {}, null, 2)}
+                    key={selectedNode.id}
+                    onBlur={(e) => {
                       try {
                         const parsed = JSON.parse(e.target.value || "{}");
                         updateSelectedNode({ params: parsed });
                       } catch {
-                        // ignore invalid partial JSON while typing
+                        // Keep old params on invalid JSON
                       }
                     }}
-                    className="h-16 w-full resize-none rounded-md border border-white/10 bg-black/30 px-2 py-1 text-xs text-white outline-none focus:border-cyan-400/60"
-                    placeholder='{"threshold": 20}'
+                    className="h-24 w-full resize-none rounded-md border border-white/10 bg-black/30 px-2 py-1 text-[11px] font-mono text-white outline-none focus:border-cyan-400/60"
+                    placeholder='{ "threshold": 20 }'
                   />
+                  <p className="text-[10px] text-white/40 italic">Changes apply when you click away.</p>
                 </div>
               )}
             </div>

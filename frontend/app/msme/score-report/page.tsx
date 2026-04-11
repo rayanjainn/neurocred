@@ -9,6 +9,8 @@ import {
   PageHeader,
   StatusBadge,
 } from "@/components/shared";
+import { VigilanceReasoningCard } from "@/components/VigilanceReasoningCard";
+import { AnomalyMetricsCard } from "@/components/AnomalyMetricsCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,33 +102,24 @@ export default function MsmeScoreReport() {
     }
 
     try {
-            const res = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [{ role: "user", content: msg }],
-          context: { scoreData: score }
-        })
-      });
-
-      if (!res.ok) throw new Error("Network error");
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder("utf-8");
+      const { msmeApi } = await import("@/dib/api");
       
-      let botMsg = "";
+      // Add empty message for the assistant that we will stream into
       setChatMessages(prev => [...prev, { role: "assistant", content: "" }]);
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        botMsg += decoder.decode(value, { stream: true });
-        
-        setChatMessages(prev => {
-          const newArray = [...prev];
-          newArray[newArray.length - 1] = { ...newArray[newArray.length - 1], content: botMsg };
-          return newArray;
-        });
-      }
+      
+      let fullContent = "";
+      await msmeApi.streamChat({ message: msg, user_id: score?.user_id }, (chunk) => {
+        if (chunk.content) {
+          fullContent += chunk.content;
+          setChatMessages(prev => {
+            const next = [...prev];
+            if (next.length > 0) {
+              next[next.length - 1] = { role: "assistant", content: fullContent };
+            }
+            return next;
+          });
+        }
+      });
     } catch {
       setChatMessages((prev) => [
         ...prev,
@@ -193,7 +186,7 @@ export default function MsmeScoreReport() {
       <div className="p-6 w-full max-w-[1400px] mx-auto">
         <PageHeader
           title="Credit Score Report"
-          description={`Score as of ${new Date(score.score_freshness).toLocaleString("en-IN", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}`}
+          description={`Score as of ${score.score_freshness ? new Date(score.score_freshness).toLocaleString("en-IN", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }) : new Date(score.computed_at || Date.now()).toLocaleString("en-IN", { day: "numeric", month: "long", year: "numeric" })}`}
           actions={
             <div className="flex gap-2">
               <Button
@@ -238,8 +231,9 @@ export default function MsmeScoreReport() {
                 {
                   label: "MSME Category",
                   value:
-                    score.msme_category.charAt(0).toUpperCase() +
-                    score.msme_category.slice(1),
+                    score.msme_category
+                      ? score.msme_category.charAt(0).toUpperCase() + score.msme_category.slice(1)
+                      : "Personal",
                   tip: FIELD_TIPS.msme_category,
                 },
                 {
@@ -386,7 +380,7 @@ export default function MsmeScoreReport() {
           </CardHeader>
           <CardContent className="p-4">
             <ul className="space-y-3">
-              {score.top_reasons.map((reason: string, i: number) => (
+              {(score.top_reasons || score.insights || []).map((reason: string, i: number) => (
                 <li
                   key={i}
                   className="flex items-start gap-3 text-sm text-foreground"
@@ -444,16 +438,18 @@ export default function MsmeScoreReport() {
                 onKeyDown={(e) => e.key === "Enter" && handleChat()}
                 className="text-sm border-border"
               />
-              <Button
-                size="icon"
-                className="shrink-0 bg-primary hover:bg-primary/90"
-                onClick={handleChat}
-              >
-                <Send className="w-4 h-4" />
-              </Button>
             </div>
           </CardContent>
         </Card>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
+          <div className="md:col-span-2">
+            <VigilanceReasoningCard userId={user.id} />
+          </div>
+          <div className="md:col-span-1">
+            <AnomalyMetricsCard userId={user.id} />
+          </div>
+        </div>
       </div>
     </TooltipProvider>
   );

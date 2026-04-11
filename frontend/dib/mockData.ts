@@ -10,7 +10,8 @@ export const MOCK_USERS = [
   { id: "usr_004", name: "Anjali Mehta",   email: "anjali@sbiloans.co.in",     role: "loan_officer",   bank_id: "bank_001",       status: "active",    created_at: "2024-01-10T09:00:00+05:30" },
   { id: "usr_005", name: "Vikram Nair",    email: "vikram@analyst.platform.in",role: "credit_analyst",                            status: "active",    created_at: "2024-02-05T09:00:00+05:30" },
   { id: "usr_006", name: "Deepa Krishnan", email: "deepa@risk.platform.in",    role: "risk_manager",                              status: "active",    created_at: "2024-01-01T09:00:00+05:30" },
-  { id: "usr_007", name: "Arjun Kapoor",   email: "arjun@admin.platform.in",   role: "admin",                                     status: "active",    created_at: "2023-12-01T09:00:00+05:30" },
+  { id: "usr_008", name: "Arjun Kapoor",   email: "arjun@admin.platform.in",   role: "admin",                                     status: "active",    created_at: "2023-12-01T09:00:00+05:30" },
+  { id: "usr_007", name: "Aditya Verma",   email: "aditya@vmail.com",          role: "individual",                                status: "active",    created_at: "2025-03-01T12:00:00+05:30" },
 ];
 
 // ---- BANKS ----
@@ -227,7 +228,11 @@ export const MOCK_NOTIFICATIONS: Record<string, any[]> = {
     { id: "notif_011", type: "dispute_update",    title: "New dispute in queue",                  body: "GSTIN 07AFDYP4721H7Z9 has raised a fraud flag dispute.",                                 read: false, created_at: "2026-04-02T08:05:00+05:30", action_url: "/analyst/dispute-queue" },
   ],
   usr_006: [],
-  usr_007: [],
+  usr_007: [
+    { id: "notif_012", type: "score_ready", title: "Your financial health score is ready", body: "Score: 74/100 — Low Risk. View your personal finance report.", read: false, created_at: "2026-04-11T08:05:00+05:30", action_url: "/individual/report" },
+    { id: "notif_013", type: "insight",     title: "AI Insight: Savings rate is strong",  body: "Your savings rate of 38.8% is well above the recommended 20% threshold.", read: true, created_at: "2026-04-11T08:10:00+05:30", action_url: "/individual/dashboard" },
+  ],
+  usr_008: [],
 };
 
 // ---- FRAUD ALERTS ----

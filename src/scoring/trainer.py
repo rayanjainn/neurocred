@@ -38,9 +38,11 @@ FEATURE_COLUMNS: list[str] = [
     # recurrence & pattern
     "subscription_count_30d",
     "emi_payment_count_90d",
+    "salary_day_spike_flag",
     "lifestyle_inflation_trend",
     "merchant_category_shift_count",
     # anomaly & concentration
+    "anomaly_flag",
     "top3_merchant_concentration",
     "peer_cohort_benchmark_deviation",
     "temporal_anomaly_flag",
@@ -48,10 +50,13 @@ FEATURE_COLUMNS: list[str] = [
     "income_7d",
     "income_30d",
     "income_90d",
+    "essential_7d",
     "essential_30d",
     "essential_90d",
+    "discretionary_7d",
     "discretionary_30d",
     "discretionary_90d",
+    "net_cashflow_7d",
     "net_cashflow_30d",
     "net_cashflow_90d",
     "data_completeness_score",
@@ -188,6 +193,19 @@ def generate_proxy_labels(df: pl.DataFrame) -> np.ndarray:
 
     # lifestyle inflation > 30% MoM
     scores = np.where(lifestyle > 0.3, scores + 0.12, scores)
+
+    # NEW: Salary day spike (indicates poor financial discipline)
+    salary_spike = _col("salary_day_spike_flag")
+    scores = np.where(salary_spike == 1, scores + 0.12, scores)
+
+    # NEW: Subscription burden
+    sub_count = _col("subscription_count_30d")
+    scores = np.where(sub_count > 4, scores + 0.08, scores)
+
+    # NEW: Discretionary 7d vs Income 7d (short-term liquidity stress)
+    inc_7d = _col("income_7d")
+    disc_7d = _col("discretionary_7d")
+    scores = np.where((inc_7d < disc_7d) & (disc_7d > 1000), scores + 0.15, scores)
 
     # MSME specific risk signals
     gst_compliance = _col("gst_filing_compliance_rate", default=1.0)

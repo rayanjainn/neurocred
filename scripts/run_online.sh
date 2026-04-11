@@ -3,8 +3,9 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "=== Cleaning Up Ports (8001, 3000) ==="
+echo "=== Cleaning Up Ports & Workers ==="
 lsof -ti :8001,3000 | xargs kill -9 2>/dev/null || true
+pkill -f "python -m src.credit.scoring_worker" || true
 
 echo "=== Starting Redis ==="
 redis-server --daemonize yes --logfile /tmp/airavat-redis.log

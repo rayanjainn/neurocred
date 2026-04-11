@@ -56,6 +56,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config.settings import settings
 from src.features.schemas import BehaviouralFeatureVector
 from src.strategy.strategy_routes import router as strategy_router
+from src.api.portal_routes import router as portal_router
 
 
 @asynccontextmanager
@@ -88,6 +89,7 @@ app.add_middleware(
 )
 
 app.include_router(strategy_router)
+app.include_router(portal_router)
 
 CALL_SYSTEM_PROMPT = (
     "You are Vyapar Saathi, a smart business assistant for small vendors. "
@@ -464,9 +466,9 @@ async def get_windows(user_id: str) -> dict[str, Any]:
     return json.loads(raw)
 
 
-@app.get("/users")
-async def list_users(limit: int = 100) -> dict[str, Any]:
-    """List user IDs that have feature vectors computed."""
+@app.get("/twin-users")
+async def list_twin_users(limit: int = 100) -> dict[str, Any]:
+    """List user IDs that have feature vectors computed (internal twin endpoint)."""
     redis: aioredis.Redis = app.state.redis
     cursor = 0
     keys: list[str] = []
@@ -509,6 +511,33 @@ async def get_twin(user_id: str) -> dict[str, Any]:
         )
     data = twin.model_dump()
     data["cibil_like_score"] = twin.cibil_like_score()
+
+    # Add transaction timeline for visualization
+    from src.api.portal_routes import build_monthly_timeline, window_agg
+    timeline = build_monthly_timeline(user_id, months=12)
+    data["upi_timeline"] = [{"date": t["date"], "volume": t["daily_volume"], "count": t["daily_count"]} for t in timeline]
+    data["ewb_timeline"] = [{"date": t["date"], "volume": t["daily_ewb_volume"], "count": t["daily_ewb_count"]} for t in timeline]
+    data["data_maturity_months"] = 12
+    data["windows"] = {
+        "w30": window_agg(timeline, 30),
+        "w60": window_agg(timeline, 60),
+        "w90": window_agg(timeline, 90),
+        "w365": window_agg(timeline, 365),
+    }
+
+    # Add score history if available (calculated from twin.risk_history)
+    # risk_history is [0.12, 0.15, ...] - map to 1..100
+    if twin.risk_history:
+        score_hist = []
+        now = datetime.utcnow()
+        for i, r in enumerate(twin.risk_history):
+            score_hist.append({
+                "date": (now - timedelta(days=(len(twin.risk_history) - i) * 30)).strftime("%Y-%m-%d"),
+                "score": int((1.0 - r) * 100),
+                "risk_band": "low_risk" if r < 0.3 else ("medium_risk" if r < 0.6 else "high_risk")
+            })
+        data["score_history"] = score_hist
+
     return data
 
 
@@ -567,17 +596,19 @@ async def update_twin(user_id: str) -> dict[str, Any]:
 
 
 @app.post("/twin/{user_id}/chat")
-async def chat_with_twin(user_id: str, body: dict[str, Any]) -> dict[str, Any]:
+async def chat_with_twin(user_id: str, body: dict[str, Any]) -> Any:
     """
     Send a message to the Digital Twin avatar and get a response.
-
-    Request body: {"message": "What does my financial future look like?"}
-    Response: {role, content, intent, avatar_expression, cibil_score, ts}
+    Supports streaming if "stream": true is passed.
     """
     from src.intervention.dialogue_manager import DialogueManager
     from src.twin.twin_service import TwinService
+    from fastapi.responses import StreamingResponse
+    import asyncio
 
     message: str = body.get("message", "")
+    stream: bool = body.get("stream", False)
+
     if not message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
@@ -590,8 +621,26 @@ async def chat_with_twin(user_id: str, body: dict[str, Any]) -> dict[str, Any]:
         )
 
     dm = DialogueManager()
-    response = dm.chat(message, twin)
-    return response
+    response_data = dm.chat(message, twin)
+
+    if not stream:
+        return response_data
+
+    async def _streamer():
+        content = response_data.get("content", "")
+        words = content.split(" ")
+        for i, word in enumerate(words):
+            # Send word-by-word with the metadata on the first or every chunk
+            chunk = {
+                "content": word + (" " if i < len(words) - 1 else ""),
+                "role": "twin",
+                "avatar_expression": response_data.get("avatar_expression"),
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+            await asyncio.sleep(0.04)
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(_streamer(), media_type="text/event-stream")
 
 
 @app.get("/twin/{user_id}/report")
@@ -711,6 +760,7 @@ async def audit_replay(body: dict[str, Any]) -> dict[str, Any]:
 # ── Tier 7: Cognitive Credit Engine endpoints ─────────────────────────────────
 
 @app.post("/credit/score")
+@app.post("/score")
 async def submit_credit_score(body: dict[str, Any]) -> dict[str, Any]:
     """
     Submit an async credit scoring request for a retail consumer.
@@ -737,6 +787,7 @@ async def submit_credit_score(body: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.get("/credit/score/{task_id}")
+@app.get("/score/{task_id}")
 async def get_credit_score(task_id: str) -> dict[str, Any]:
     """
     Poll the result of a credit scoring request.
@@ -763,6 +814,7 @@ async def get_credit_score(task_id: str) -> dict[str, Any]:
 
 
 @app.get("/credit/score/{task_id}/stream")
+@app.get("/score/{task_id}/stream")
 async def stream_credit_score(task_id: str):
     """
     Server-Sent Events stream for real-time credit scoring progress.
@@ -1564,7 +1616,7 @@ async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
     )
 
     # Parse scenario
-    sc_raw = body.get("scenario", {})
+    sc_raw = body.get("scenario") or {}
     scenario = ScenarioSpec(
         type=sc_raw.get("type", "baseline"),
         components=sc_raw.get("components", []),
@@ -1573,7 +1625,7 @@ async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
         custom_params=sc_raw.get("custom_params", {}),
     )
 
-    vr_raw = body.get("variance_reduction", {})
+    vr_raw = body.get("variance_reduction") or {}
     vr = VarianceReduction(
         sobol=bool(vr_raw.get("sobol", True)),
         antithetic=bool(vr_raw.get("antithetic", True)),

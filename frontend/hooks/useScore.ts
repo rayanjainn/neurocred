@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { scoreApi } from "@/dib/api";
 
-export type ScoreStatus = "idle" | "pending" | "processing" | "complete" | "failed";
+export type ScoreStatus = "idle" | "pending" | "ingesting" | "classifying" | "extracting_features" | "benchmarking" | "scoring" | "complete" | "failed" | "processing";
 
 export interface ShapEntry {
   feature_name: string;
@@ -28,7 +28,10 @@ export interface ScoreData {
   shap_waterfall: ShapEntry[] | null;
   score_freshness: string;
   data_maturity_months: number;
+  user_id?: string;
   error?: string | null;
+  computed_at?: string;
+  insights?: string[];
 }
 
 const taskKey = (gstin: string) => `msme_task_${gstin}`;
@@ -47,14 +50,15 @@ export function useScore(gstin: string | undefined) {
         const result = await scoreApi.get(taskId).catch(() => null);
         if (!result) { setStatus("failed"); break; }
 
-        const s = (result as ScoreData).status;
+        const rawData = result as any;
+        const s = rawData.status;
         if (s === "complete") {
-          setScore(result as ScoreData);
+          setScore(rawData as ScoreData);
           setStatus("complete");
           break;
         }
         if (s === "failed") {
-          setScore(result as ScoreData);
+          setScore(rawData as ScoreData);
           setStatus("failed");
           break;
         }

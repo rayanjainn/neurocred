@@ -30,7 +30,21 @@ class TwinStore:
     # ── read ──────────────────────────────────────────────────────────────────
 
     async def get(self, user_id: str) -> Optional[DigitalTwin]:
-        raw = await self._r.get(_TWIN_KEY.format(uid=user_id))
+        try:
+            raw = await self._r.get(_TWIN_KEY.format(uid=user_id))
+        except Exception as exc:
+            if "WRONGTYPE" in str(exc):
+                # Stale key with wrong Redis type — delete and return None
+                import logging
+                logging.getLogger(__name__).warning(
+                    "[twin-store] WRONGTYPE on twin:%s — deleting stale key and rebuilding", user_id
+                )
+                try:
+                    await self._r.delete(_TWIN_KEY.format(uid=user_id))
+                except Exception:
+                    pass
+                return None
+            raise
         if not raw:
             return None
         return DigitalTwin.model_validate_json(raw)

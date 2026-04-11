@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     llm_model: str = "google/gemma-3-4b-it:free"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 
 settings = Settings()

@@ -29,7 +29,7 @@ import {
 } from "@/dib/mockData";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api";
-const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
+const USE_MOCK = false; // Forced to false to completely disable mock pipeline
 const MOCK_DELAY_MS = Number(process.env.NEXT_PUBLIC_MOCK_DELAY_MS ?? 120);
 
 function getToken(): string | null {
@@ -43,21 +43,30 @@ function deepClone<T>(value: T): T {
 
 const DEMO_ONLY_USERS = [
   {
-    id: "usr_001",
-    name: "Priya Sharma",
+    id: "u_970bceda",
+    name: "Generated Bakery (09DCT)",
     email: "priya@bakerycraft.in",
     role: "msme",
-    gstin: "19HLPRM4249Z3Z1",
+    gstin: "09DCTOP0026R4Z8",
     status: "active",
   },
   {
-    id: "usr_002",
-    name: "Rahul Desai",
+    id: "u_a22645da",
+    name: "Generated Auto (24IEY)",
     email: "rahul@boltautomotive.in",
     role: "msme",
-    gstin: "09EXVAF9205D6Z0",
+    gstin: "24IEYIC0868X8Z8",
     status: "active",
   },
+  {
+    id: "u_5884dd49",
+    name: "Individual Persona (33EBR)",
+    email: "user3@airavat.in",
+    role: "individual",
+    accountNumber: "XXXXdd49",
+    ifsc: "SBIN0002499",
+    status: "active",
+  }
 ];
 
 const mockState = {
@@ -747,6 +756,69 @@ async function apiFetch<T = unknown>(
   return res.json() as Promise<T>;
 }
 
+async function apiStream(
+  path: string,
+  body: Record<string, any>,
+  onChunk: (data: any) => void,
+): Promise<void> {
+  if (USE_MOCK) {
+    // Basic mock stream simulation
+    const mockMsg = "I am a mock response streaming from the frontend for testing.";
+    const words = mockMsg.split(" ");
+    for (const word of words) {
+      onChunk({ content: word + " ", role: "assistant" });
+      await sleep(100);
+    }
+    return;
+  }
+
+  const token = getToken();
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+
+  if (!res.ok) {
+    throw new Error("Stream request failed");
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed.startsWith("data: ")) {
+        const dataStr = trimmed.slice(6).trim();
+        if (dataStr === "[DONE]") return;
+        try {
+          const data = JSON.parse(dataStr);
+          onChunk(data);
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
+  }
+}
+
 // Auth
 export const authApi = {
   login: (email: string, password: string) =>
@@ -847,6 +919,11 @@ export const reminderApi = {
     }),
 };
 
+// Users
+export const usersApi = {
+  list: () => apiFetch<any[]>("/users"),
+};
+
 // Banks
 export const bankApi = {
   list: () => apiFetch<unknown[]>("/banks"),
@@ -866,6 +943,7 @@ export const bankApi = {
 export const adminApi = {
   getExplorerGstins: () => apiFetch<any[]>("/explorer/gstins"),
   getExplorerDetails: (gstin: string) => apiFetch<any>(`/explorer/${gstin}/details`),
+  profileSearch: (q: string) => apiFetch<any>(`/analyst/profile/search?q=${encodeURIComponent(q)}`),
   getUsers: () => apiFetch<unknown[]>("/users"),
   createUser: (body: Record<string, unknown>) =>
     apiFetch<Record<string, unknown>>("/users", {
@@ -939,6 +1017,8 @@ export const msmeApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  streamChat: (body: Record<string, unknown>, onChunk: (data: any) => void) =>
+    apiStream("/chat", body, onChunk),
   getGuideTopics: () => apiFetch<unknown[]>("/guide-topics"),
 };
 
@@ -947,3 +1027,139 @@ export const analyticsApi = {
   getCohortMedian: (category: string = "all") =>
     apiFetch<Record<string, unknown>>(`/analytics/cohort-median?msme_category=${category}`),
 };
+
+// Twin (Tier 4)
+// Twin (Tier 4)
+export const twinApi = {
+  get: (userId: string) => apiFetch<Record<string, unknown>>(`/twin/${userId}`),
+  update: (userId: string, body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(`/twin/${userId}/update`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  chat: (userId: string, body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(`/twin/${userId}/chat`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  streamChat: (
+    userId: string,
+    body: Record<string, unknown>,
+    onChunk: (data: any) => void,
+  ) => apiStream(`/twin/${userId}/chat`, body, onChunk),
+  getHistory: (userId: string) => apiFetch<unknown[]>(`/twin/${userId}/history`),
+  getReport: (userId: string) => apiFetch<Record<string, unknown>>(`/twin/${userId}/report`),
+  getTriggers: (userId: string) => apiFetch<unknown[]>(`/twin/${userId}/triggers`),
+  getAudit: (userId: string) => apiFetch<unknown[]>(`/twin/${userId}/audit`),
+  bootstrap: () => apiFetch<Record<string, unknown>>("/twin/bootstrap", { method: "POST" }),
+};
+
+// Simulation (Tier 6)
+export const simulationApi = {
+  run: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/simulation/run", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  get: (simId: string, userId: string) =>
+    apiFetch<Record<string, unknown>>(`/simulation/${simId}?user_id=${userId}`),
+  getEws: (userId: string) =>
+    apiFetch<Record<string, unknown>>(`/simulation/ews/${userId}`),
+  getFanChart: (userId: string) =>
+    apiFetch<Record<string, unknown>>(`/simulation/fan/${userId}`),
+  scenarios: () => apiFetch<Record<string, unknown>>("/simulation/scenarios"),
+  counterfactuals: () => apiFetch<Record<string, unknown>>("/simulation/counterfactuals"),
+  health: () => apiFetch<Record<string, unknown>>("/simulation/health"),
+};
+
+// Voice
+export const voiceApi = {
+  resolve: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/voice/resolve", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  log: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/voice/actions/log", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  startCall: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/voice/call/start", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  respond: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/voice/call/respond", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
+// Reasoning (Tier 7)
+export const reasoningApi = {
+  run: (userId: string) => apiFetch<Record<string, unknown>>(`/reasoning/${userId}/run`, { method: "POST" }),
+  getResult: (userId: string) => apiFetch<Record<string, unknown>>(`/reasoning/${userId}/result`),
+  getNarrative: (userId: string) => apiFetch<Record<string, unknown>>(`/reasoning/${userId}/narrative`),
+  getCot: (userId: string) => apiFetch<Record<string, unknown>>(`/reasoning/${userId}/cot`),
+  startInterrogation: (sessionId: string) => apiFetch<Record<string, unknown>>(`/reasoning/interrogation/${sessionId}`),
+  answerInterrogation: (sessionId: string, answer: string) =>
+    apiFetch<Record<string, unknown>>(`/reasoning/interrogation/${sessionId}/answer`, {
+      method: "POST",
+      body: JSON.stringify({ answer }),
+    }),
+};
+
+// Vigilance & Vigil (Tier 8)
+export const vigilanceApi = {
+  run: (userId: string) => apiFetch<Record<string, unknown>>(`/vigilance/${userId}/run`, { method: "POST" }),
+  getResult: (userId: string) => apiFetch<Record<string, unknown>>(`/vigilance/${userId}/result`),
+  getSummary: (userId: string) => apiFetch<Record<string, unknown>>(`/vigilance/${userId}/summary`),
+  analyzeScam: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/vigilance/scam/analyze", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getStreamStatus: () => apiFetch<Record<string, unknown>>("/vigilance/stream/status"),
+};
+
+// Strategy
+export const strategyApi = {
+  listTemplates: () => apiFetch<unknown[]>("/strategy/templates"),
+  simulate: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/strategy/simulate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  list: () => apiFetch<unknown[]>("/strategy"),
+  create: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/strategy", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getHistory: (strategyId: string) => apiFetch<unknown[]>(`/strategy/${strategyId}/history`),
+  publish: (strategyId: string) =>
+    apiFetch<Record<string, unknown>>(`/strategy/${strategyId}/publish`, {
+      method: "POST",
+    }),
+};
+
+// Ingestion
+export const ingestApi = {
+  trigger: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/ingest/trigger", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getStatus: () => apiFetch<Record<string, unknown>>("/ingest/status"),
+  getClassifyStatus: () => apiFetch<Record<string, unknown>>("/classify/status"),
+  getFeatures: (userId: string) => apiFetch<Record<string, unknown>>(`/features/${userId}`),
+  getWindows: (userId: string) => apiFetch<Record<string, unknown>>(`/windows/${userId}`),
+};
+
+// Individual Finance (Personal Role)
+export const individualApi = {
+  getScore: (userId: string) => apiFetch<Record<string, unknown>>(`/individual/${userId}/score`),
+  getInsights: (userId: string) => apiFetch<Record<string, unknown>>(`/individual/${userId}/insights`),
+};
+

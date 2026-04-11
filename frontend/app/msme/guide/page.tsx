@@ -81,10 +81,6 @@ export default function MsmeGuidePage() {
     return null;
   }
 
-  if (!user || user.role !== "msme") {
-    return null;
-  }
-
   const sendMessage = async () => {
     if (!input.trim()) return;
     const prompt = input;
@@ -125,6 +121,7 @@ export default function MsmeGuidePage() {
       });
 
       if (!res.ok) throw new Error("Network error");
+      if (!res.body) throw new Error("No response body");
       const reader = res.body.getReader();
       const decoder = new TextDecoder("utf-8");
       

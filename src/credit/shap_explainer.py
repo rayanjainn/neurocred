@@ -60,9 +60,11 @@ class CreditExplainer:
         sorted_idx = np.argsort(np.abs(shap_row))[::-1]
         contributions = [
             {
-                "feature":    self.feature_columns[i],
-                "shap_value": float(shap_row[i]),
-                "direction":  "increases_risk" if shap_row[i] > 0 else "decreases_risk",
+                "feature":       self.feature_columns[i],
+                "feature_name":  self.feature_columns[i],
+                "shap_value":    float(shap_row[i]),
+                "direction":     "increases_risk" if shap_row[i] > 0 else "decreases_risk",
+                "abs_magnitude": float(abs(shap_row[i])),
             }
             for i in sorted_idx
         ]

@@ -7,6 +7,9 @@ import { cn } from "@/dib/utils";
 import { TwinEnergyAura } from "@/components/TwinEnergyAura";
 import { VoiceModal } from "@/components/voice/VoiceModal";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/dib/authContext";
+
+import { voiceApi } from "@/dib/api";
 
 const VOICE_PENDING_ACTION_KEY = "voice.pendingAction";
 
@@ -15,8 +18,9 @@ interface DigitalTwinCardProps {
 }
 
 export function DigitalTwinCard({ score }: DigitalTwinCardProps) {
+  const { user } = useAuth();
   const twin = {
-    name: "Priya",
+    name: user?.name?.split(" ")[0] || "User",
     riskLevel: (score?.risk_band?.toLowerCase() as "low" | "medium" | "high") || "medium",
     liquidity: score?.liquidity_status || "MEDIUM",
     stability: score?.data_maturity_months ? Math.min(100, score.data_maturity_months * 8) : 82,
@@ -53,19 +57,10 @@ const RISK_STYLES = {
 
     setIsCalling(true);
     try {
-      const response = await fetch("/api/voice-agent/call/start", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          to: callNumber.trim(),
-          userId: score?.user_id || "",
-        }),
+      const payload: any = await voiceApi.startCall({
+        to: callNumber.trim(),
+        userId: score?.user_id || "",
       });
-
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload?.error || payload?.detail || "Could not start outbound call");
-      }
 
       toast({
         title: "Calling now",

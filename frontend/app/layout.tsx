@@ -1,21 +1,21 @@
 import type { Metadata } from 'next'
-import { Inter, JetBrains_Mono } from 'next/font/google'
+import { Space_Grotesk, Syne, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import Providers from '@/components/Providers'
 
-const interDisplay = Inter({ subsets: ['latin'], variable: '--font-display', weight: ['700', '800'] })
-const interBody = Inter({ subsets: ['latin'], variable: '--font-body', weight: ['400', '500', '600', '700'] })
+const syne = Syne({ subsets: ['latin'], variable: '--font-display', weight: ['700', '800'] })
+const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-body', weight: ['400', '500', '600', '700'] })
 const jetBrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-data', weight: ['400'] })
 
 export const metadata: Metadata = {
-  title: 'MSME Credit Platform',
-  description: 'AI-powered credit scoring and loan management for MSMEs',
+  title: 'Nexus — Financial Intelligence',
+  description: 'Agentic AI Financial Intelligence Platform for MSMEs',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={`${interDisplay.variable} ${interBody.variable} ${jetBrainsMono.variable} font-sans antialiased`}>
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <body className={`${syne.variable} ${spaceGrotesk.variable} ${jetBrainsMono.variable} font-body antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>

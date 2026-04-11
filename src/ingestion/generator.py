@@ -1365,49 +1365,78 @@ def event_stream(n_profiles: int = N_PROFILES, history_months: int = 12):
     """
     from src.ingestion.schemas import CanonicalEvent
     
-    # 1. Build profiles
-    fake = Faker("en_IN")
-    Faker.seed(42)
-    np.random.seed(42)
-    random.seed(42)
-    
-    profiles = build_profiles(fake, n_profiles=n_profiles)
-    
-    # 2. Generate all sources as DataFrames
-    bank_df  = generate_bank_transactions(profiles)
-    upi_df   = generate_upi_transactions(profiles)
-    sms_df   = generate_sms_alerts(bank_df, upi_df)
-    emi_df   = generate_emi_schedules(profiles)
-    ob_df    = generate_open_banking(profiles)
-    voice_df = generate_voice_transcripts(profiles)
+    sentinel = RAW_DATA_PATH / "user_profiles.parquet"
+    if sentinel.exists():
+        logger.info("[generator] Loading pre-generated events from data/raw...")
+        profiles_df = pl.read_parquet(sentinel)
+        profiles = profiles_df.to_dicts()
+        
+        # Load all chunks and combine
+        sources = [
+            "bank_transactions", "upi_transactions", "sms_alerts", 
+            "emi_schedules", "open_banking", "voice_transcripts"
+        ]
+        
+        dfs = {}
+        for s in sources:
+            files = list(RAW_DATA_PATH.glob(f"{s}_chunk_*.parquet"))
+            if files:
+                dfs[s] = pl.concat([pl.read_parquet(f) for f in files])
+            else:
+                dfs[s] = pl.DataFrame()
+
+        bank_df = dfs.get("bank_transactions", pl.DataFrame())
+        upi_df = dfs.get("upi_transactions", pl.DataFrame())
+        sms_df = dfs.get("sms_alerts", pl.DataFrame())
+        emi_df = dfs.get("emi_schedules", pl.DataFrame())
+        ob_df = dfs.get("open_banking", pl.DataFrame())
+        voice_df = dfs.get("voice_transcripts", pl.DataFrame())
+    else:
+        logger.info("[generator] No pre-generated data found. Generating in-memory...")
+        # 1. Build profiles
+        fake = Faker("en_IN")
+        Faker.seed(42)
+        np.random.seed(42)
+        random.seed(42)
+        
+        profiles = build_profiles(fake, n_profiles=n_profiles)
+        
+        # 2. Generate all sources as DataFrames
+        bank_df  = generate_bank_transactions(profiles)
+        upi_df   = generate_upi_transactions(profiles)
+        sms_df   = generate_sms_alerts(bank_df, upi_df)
+        emi_df   = generate_emi_schedules(profiles)
+        ob_df    = generate_open_banking(profiles)
+        voice_df = generate_voice_transcripts(profiles)
     
     # 3. Normalise and yield as events
-    # We'll merge them into one list and sort by timestamp to simulate a real flow
     all_events: list[dict] = []
     
     # Bank
-    for row in bank_df.to_dicts():
-        all_events.append({
-            "event_id": row["event_id"],
-            "user_id": row["user_id"],
-            "timestamp": row["timestamp"],
-            "amount": row["amount"],
-            "merchant_name": row["merchant_name"],
-            "channel": row["channel"],
-            "balance_after": row["balance_after"],
-            "reference_id": row["reference_id"],
-            "source_provenance": "bank_api",
-            "status": row["status"],
-            "recurrence_flag": row["recurrence_flag"],
-        })
+    if not bank_df.is_empty():
+        for row in bank_df.to_dicts():
+            all_events.append({
+                "event_id": row["event_id"],
+                "user_id": row["user_id"],
+                "timestamp": row["timestamp"],
+                "amount": row["amount"],
+                "merchant_name": row["merchant_name"],
+                "channel": row["channel"],
+                "balance_after": row["balance_after"],
+                "reference_id": row["reference_id"],
+                "source_provenance": "bank_api",
+                "status": row["status"],
+                "recurrence_flag": row["recurrence_flag"],
+            })
         
     # UPI
-    for row in upi_df.to_dicts():
-        all_events.append({
-            "event_id": row["event_id"],
-            "user_id": row["user_id"],
-            "timestamp": row["timestamp"],
-            "amount": row["amount"],
+    if not upi_df.is_empty():
+        for row in upi_df.to_dicts():
+            all_events.append({
+                "event_id": row["event_id"],
+                "user_id": row["user_id"],
+                "timestamp": row["timestamp"],
+                "amount": row["amount"],
             "merchant_name": row["merchant_name"],
             "channel": "UPI",
             "reference_id": row["event_id"][:8],
