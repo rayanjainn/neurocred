@@ -26,21 +26,36 @@ Tier 7 — Cognitive Credit Engine endpoints:
   - GET  /credit/{user_id}/status     — latest credit state from 24h recalibration cache
   - POST /credit/audit/replay         — point-in-time feature replay (RBI compliance)
   - GET  /credit/health               — model load status + queue depth
+
+Tier 6 — Predictive Risk Simulation Engine endpoints:
+  - POST /simulation/run              — run full Monte Carlo simulation
+  - GET  /simulation/{sim_id}         — retrieve cached simulation result
+  - GET  /simulation/ews/{user_id}    — latest EWS snapshot (streaming endpoint)
+  - GET  /simulation/fan/{user_id}    — cached fan chart for dashboard
+  - GET  /simulation/scenarios        — list available stress scenarios
+  - GET  /simulation/counterfactuals  — list available counterfactual scenarios
+  - GET  /simulation/health           — engine health check
 """
 
 from __future__ import annotations
 
 import json
+import os
+import re
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
+from urllib.parse import urlencode
+from xml.sax.saxutils import escape
 
+import httpx
 import redis.asyncio as aioredis
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from config.settings import settings
 from src.features.schemas import BehaviouralFeatureVector
+from src.strategy.strategy_routes import router as strategy_router
 
 
 @asynccontextmanager
@@ -72,6 +87,88 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(strategy_router)
+
+CALL_SYSTEM_PROMPT = (
+    "You are Vyapar Saathi, a smart business assistant for small vendors. "
+    "Keep answers short, conversational, practical, and voice-friendly."
+)
+
+
+def _normalize_public_base(raw: str | None) -> str | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    if value.startswith("http://") or value.startswith("https://"):
+        return value.rstrip("/")
+    return f"https://{value.rstrip('/')}"
+
+
+def _resolve_webhook_base_url(request: Request) -> str | None:
+    configured = _normalize_public_base(
+        os.getenv("VOICE_PUBLIC_BASE_URL") or os.getenv("DOMAIN")
+    )
+    if configured:
+        return configured
+
+    host = request.headers.get("host")
+    if not host:
+        return None
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme or "https")
+    return f"{proto}://{host}"
+
+
+async def _is_reachable(base_url: str) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{base_url}/health")
+        return response.status_code < 500
+    except Exception:
+        return False
+
+
+def _safe_speech(text: str) -> str:
+    return escape(" ".join(text.replace("\n", " ").split())[:900])
+
+
+async def _groq_voice_reply(user_text: str) -> str:
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return (
+            "I heard you. I can help with earnings, expenses, stock, and next best actions. "
+            "Please ask again after Groq API key is configured."
+        )
+
+    payload = {
+        "model": os.getenv("GROQ_CALL_MODEL", "llama-3.1-8b-instant"),
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": CALL_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        response.raise_for_status()
+        data = response.json()
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        return content or "I am here. Please ask me about your business performance."
+    except Exception:
+        return "I am unable to fetch a smart reply right now. Please try again in a moment."
+
 
 # ── health ────────────────────────────────────────────────────────────────────
 
@@ -84,6 +181,152 @@ async def health() -> dict[str, str]:
     except Exception:
         redis_status = "down"
     return {"status": "ok", "redis": redis_status}
+
+
+# ── Voice call assistant (Twilio) ───────────────────────────────────────────
+
+@app.post("/voice/call/start")
+async def start_voice_call(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    to_number = str(body.get("to", "")).strip()
+    user_id = str(body.get("userId", "")).strip()
+    if not re.fullmatch(r"\+[1-9]\d{7,14}", to_number):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a valid phone number in E.164 format, e.g. +919876543210",
+        )
+
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    from_number = os.getenv("TWILIO_PHONE_NUMBER", "").strip()
+    if not account_sid or not auth_token or not from_number:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Missing Twilio config. Set TWILIO_ACCOUNT_SID, "
+                "TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER."
+            ),
+        )
+
+    base_url = _resolve_webhook_base_url(request)
+    if not base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing VOICE_PUBLIC_BASE_URL or DOMAIN for Twilio webhooks.",
+        )
+
+    reachable = await _is_reachable(base_url)
+    if not reachable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Public webhook URL is not reachable: {base_url}. "
+                "Start or refresh your tunnel and update VOICE_PUBLIC_BASE_URL."
+            ),
+        )
+
+    query = urlencode({"userId": user_id}) if user_id else ""
+    webhook = f"{base_url}/voice/call/incoming"
+    if query:
+        webhook = f"{webhook}?{query}"
+
+    twilio_url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
+    payload = {
+        "To": to_number,
+        "From": from_number,
+        "Url": webhook,
+        "Method": "POST",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                twilio_url,
+                data=payload,
+                auth=(account_sid, auth_token),
+            )
+        if response.status_code >= 400:
+            detail = response.text[:500]
+            raise HTTPException(
+                status_code=502,
+                detail=f"Twilio call creation failed: {detail}",
+            )
+
+        call_data = response.json()
+        return {
+            "ok": True,
+            "callSid": call_data.get("sid"),
+            "status": call_data.get("status"),
+            "to": call_data.get("to"),
+            "from": call_data.get("from"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to initiate call: {exc}") from exc
+
+
+@app.api_route("/voice/call/incoming", methods=["GET", "POST"])
+async def voice_call_incoming(request: Request) -> Response:
+    base_url = _resolve_webhook_base_url(request) or ""
+    user_id = str(request.query_params.get("userId", "")).strip()
+    query = urlencode({"userId": user_id}) if user_id else ""
+    respond_url = f"{base_url}/voice/call/respond"
+    if query:
+        respond_url = f"{respond_url}?{query}"
+
+    xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Say voice=\"alice\">Welcome to Vyapar Saathi assistant.</Say>
+  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(respond_url)}\">
+    <Say voice=\"alice\">You can ask me about earnings, expenses, profit, stock, or what to do next.</Say>
+  </Gather>
+  <Say voice=\"alice\">I did not catch that.</Say>
+  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
+</Response>"""
+    return Response(content=xml, media_type="text/xml")
+
+
+@app.api_route("/voice/call/respond", methods=["GET", "POST"])
+async def voice_call_respond(request: Request) -> Response:
+    base_url = _resolve_webhook_base_url(request) or ""
+    user_id = str(request.query_params.get("userId", "")).strip()
+    query = urlencode({"userId": user_id}) if user_id else ""
+    next_url = f"{base_url}/voice/call/respond"
+    if query:
+        next_url = f"{next_url}?{query}"
+
+    form = await request.form()
+    speech_text = str(form.get("SpeechResult", "")).strip()
+
+    if not speech_text:
+        xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(next_url)}\">
+    <Say voice=\"alice\">I could not hear you clearly. Please say that again.</Say>
+  </Gather>
+  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
+</Response>"""
+        return Response(content=xml, media_type="text/xml")
+
+    if re.search(r"\b(bye|goodbye|end call|stop|hang up|thank you)\b", speech_text, re.I):
+        xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Say voice=\"alice\">Thank you. Ending the call now. Have a productive day.</Say>
+  <Hangup/>
+</Response>"""
+        return Response(content=xml, media_type="text/xml")
+
+    reply = await _groq_voice_reply(speech_text)
+    safe_reply = _safe_speech(reply)
+    xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Say voice=\"alice\">{safe_reply}</Say>
+  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(next_url)}\">
+    <Say voice=\"alice\">You can continue speaking, or say bye to end the call.</Say>
+  </Gather>
+  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
+</Response>"""
+    return Response(content=xml, media_type="text/xml")
 
 
 # ── Tier 1: ingestion trigger ─────────────────────────────────────────────────
@@ -1247,6 +1490,210 @@ async def vigilance_stream_status() -> dict[str, Any]:
         "stream_length": stream_len,
         "status":       "ok",
     }
+
+
+# ── Tier 6: Predictive Risk Simulation Engine ─────────────────────────────────
+
+@app.post("/simulation/run")
+async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Run a full Monte Carlo risk simulation for a user.
+
+    Request body mirrors SimulationRequest dataclass:
+      {
+        "user_id": "u_0001",
+        "twin_snapshot": {
+          "income_stability": 0.65,
+          "spending_volatility": 0.35,
+          "liquidity_health": "MEDIUM",
+          "risk_score": 0.41,
+          "cash_buffer_days": 14.0,
+          "emi_monthly": 15000,
+          "emi_overdue_count": 0,
+          "cash_balance_current": 42000,
+          "cascade_susceptibility": 0.45,
+          "persona": "genuine_struggling",
+          "income_monthly": 50000,
+          "essential_expense_monthly": 20000,
+          "discretionary_expense_monthly": 10000,
+          "overdraft_limit": 5000
+        },
+        "horizon_days": null,
+        "num_simulations": 1000,
+        "scenario": {
+          "type": "compound",
+          "components": ["C_JOB_MEDICAL"],
+          "start_day": 0,
+          "custom_params": {}
+        },
+        "variance_reduction": {"sobol": true, "antithetic": true},
+        "run_counterfactual": true,
+        "counterfactual_id": "CF_EARLIER_RESTRUC",
+        "counterfactual_lookback_days": 30,
+        "seed": null
+      }
+    """
+    import asyncio
+    from src.simulation.engine import (
+        SimulationRequest, TwinSnapshot, VarianceReduction, run_simulation
+    )
+    from src.simulation.scenario_library import ScenarioSpec
+    from src.simulation.output_emitter import emit_simulation_completed
+
+    user_id = body.get("user_id", "unknown")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    # Parse twin snapshot
+    ts_raw = body.get("twin_snapshot", {})
+    twin = TwinSnapshot(
+        income_stability=float(ts_raw.get("income_stability", 0.65)),
+        spending_volatility=float(ts_raw.get("spending_volatility", 0.35)),
+        liquidity_health=ts_raw.get("liquidity_health", "MEDIUM"),
+        risk_score=float(ts_raw.get("risk_score", 0.35)),
+        cash_buffer_days=float(ts_raw.get("cash_buffer_days", 14.0)),
+        emi_monthly=float(ts_raw.get("emi_monthly", 15000.0)),
+        emi_overdue_count=int(ts_raw.get("emi_overdue_count", 0)),
+        cash_balance_current=float(ts_raw.get("cash_balance_current", 40000.0)),
+        cascade_susceptibility=float(ts_raw.get("cascade_susceptibility", 0.45)),
+        persona=ts_raw.get("persona", "unknown"),
+        income_monthly=float(ts_raw.get("income_monthly", 50000.0)),
+        essential_expense_monthly=float(ts_raw.get("essential_expense_monthly", 20000.0)),
+        discretionary_expense_monthly=float(ts_raw.get("discretionary_expense_monthly", 10000.0)),
+        overdraft_limit=float(ts_raw.get("overdraft_limit", 5000.0)),
+    )
+
+    # Parse scenario
+    sc_raw = body.get("scenario", {})
+    scenario = ScenarioSpec(
+        type=sc_raw.get("type", "baseline"),
+        components=sc_raw.get("components", []),
+        start_day=sc_raw.get("start_day", 0),
+        duration_override=sc_raw.get("duration_override"),
+        custom_params=sc_raw.get("custom_params", {}),
+    )
+
+    vr_raw = body.get("variance_reduction", {})
+    vr = VarianceReduction(
+        sobol=bool(vr_raw.get("sobol", True)),
+        antithetic=bool(vr_raw.get("antithetic", True)),
+    )
+
+    req = SimulationRequest(
+        user_id=user_id,
+        twin_snapshot=twin,
+        horizon_days=body.get("horizon_days"),
+        num_simulations=int(body.get("num_simulations", 1000)),
+        scenario=scenario,
+        variance_reduction=vr,
+        run_counterfactual=bool(body.get("run_counterfactual", True)),
+        counterfactual_id=body.get("counterfactual_id", "CF_EARLIER_RESTRUC"),
+        counterfactual_lookback_days=int(body.get("counterfactual_lookback_days", 30)),
+        seed=body.get("seed"),
+    )
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, run_simulation, req)
+
+    redis: aioredis.Redis = app.state.redis
+    await emit_simulation_completed(redis, user_id, result)
+
+    return result
+
+
+@app.get("/simulation/scenarios")
+async def list_scenarios() -> dict[str, Any]:
+    """
+    List all available stress scenarios grouped by type (atomic, compound, cascading).
+    """
+    from src.simulation.scenario_library import list_scenarios
+    return list_scenarios()
+
+
+@app.get("/simulation/counterfactuals")
+async def list_counterfactuals() -> dict[str, str]:
+    """
+    List available counterfactual scenario IDs and the questions they answer.
+    """
+    from src.simulation.counterfactual import list_counterfactuals
+    return list_counterfactuals()
+
+
+@app.get("/simulation/health")
+async def simulation_health() -> dict[str, Any]:
+    """
+    Simulation engine health check.
+    Reports module availability and Redis connectivity.
+    """
+    health: dict[str, Any] = {"status": "ok"}
+    try:
+        import importlib
+        for mod in ("src.simulation.engine", "src.simulation.regime",
+                    "src.simulation.garch", "src.simulation.correlation",
+                    "src.simulation.cascade"):
+            importlib.import_module(mod)
+        health["engine"] = "loaded"
+    except Exception as exc:
+        health["engine"] = f"error: {exc}"
+        health["status"] = "degraded"
+
+    redis: aioredis.Redis = app.state.redis
+    try:
+        await redis.ping()
+        health["redis"] = "ok"
+    except Exception:
+        health["redis"] = "down"
+        health["status"] = "degraded"
+
+    return health
+
+
+@app.get("/simulation/ews/{user_id}")
+async def get_ews_snapshot(user_id: str) -> dict[str, Any]:
+    """
+    Return latest Early Warning Score snapshot for a user.
+    Populated after the most recent simulation run.
+    """
+    from src.simulation.output_emitter import get_ews_snapshot
+    redis: aioredis.Redis = app.state.redis
+    ews = await get_ews_snapshot(redis, user_id)
+    if ews is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No EWS snapshot found for user {user_id}. Run a simulation first."
+        )
+    return ews
+
+
+@app.get("/simulation/fan/{user_id}")
+async def get_fan_chart(user_id: str) -> dict[str, Any]:
+    """
+    Return cached fan chart data for dashboard rendering.
+    Keys: p10, p25, p50, p75, p90 as daily cash series arrays.
+    """
+    from src.simulation.output_emitter import get_fan_chart
+    redis: aioredis.Redis = app.state.redis
+    fan = await get_fan_chart(redis, user_id)
+    if fan is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No fan chart found for user {user_id}. Run a simulation first."
+        )
+    return fan
+
+
+@app.get("/simulation/{sim_id}")
+async def get_simulation_result(sim_id: str, user_id: str) -> dict[str, Any]:
+    """
+    Retrieve a cached simulation result by simulation_id.
+    Requires user_id as query parameter for cache key lookup.
+    """
+    from src.simulation.output_emitter import get_cached_simulation
+    redis: aioredis.Redis = app.state.redis
+    result = await get_cached_simulation(redis, user_id, sim_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Simulation {sim_id} not found for user {user_id}")
+    return result
 
 
 if __name__ == "__main__":

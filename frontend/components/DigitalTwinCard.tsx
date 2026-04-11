@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Mic } from "lucide-react";
+import { Loader2, Mic, PhoneCall } from "lucide-react";
 import { cn } from "@/dib/utils";
 import { TwinEnergyAura } from "@/components/TwinEnergyAura";
 import { VoiceModal } from "@/components/voice/VoiceModal";
+import { useToast } from "@/hooks/use-toast";
 
 const VOICE_PENDING_ACTION_KEY = "voice.pendingAction";
 
@@ -43,6 +44,43 @@ const RISK_STYLES = {
 
   const risk = RISK_STYLES[twin.riskLevel] || RISK_STYLES.medium;
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
+  const [isCalling, setIsCalling] = useState(false);
+  const { toast } = useToast();
+
+  const handleStartCall = async () => {
+    const callNumber = window.prompt("Enter number in E.164 format (example: +919876543210)", "+91");
+    if (!callNumber?.trim()) return;
+
+    setIsCalling(true);
+    try {
+      const response = await fetch("/api/voice-agent/call/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: callNumber.trim(),
+          userId: score?.user_id || "",
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload?.error || payload?.detail || "Could not start outbound call");
+      }
+
+      toast({
+        title: "Calling now",
+        description: `Call started (${payload?.callSid || "pending"}). Pick up to talk to the assistant.`,
+      });
+    } catch (error) {
+      toast({
+        title: "Call failed",
+        description: error instanceof Error ? error.message : "Could not start outbound call",
+        variant: "destructive",
+      });
+    } finally {
+      setIsCalling(false);
+    }
+  };
 
   useEffect(() => {
     const openTwin = () => setIsVoiceModalOpen(true);
@@ -121,16 +159,30 @@ const RISK_STYLES = {
 
         <div className="flex items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">Updated {twin.lastUpdated}</p>
-          <motion.button
-            type="button"
-            whileHover={{ scale: 1.04 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => setIsVoiceModalOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-lime-400/70 bg-lime-400/15 px-3 py-1.5 text-xs font-semibold text-lime-300 hover:bg-lime-400/20"
-          >
-            <Mic className="h-3.5 w-3.5" />
-            Talk to your Twin
-          </motion.button>
+          <div className="flex items-center gap-2">
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={handleStartCall}
+              disabled={isCalling}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/70 bg-cyan-400/15 px-3 py-1.5 text-xs font-semibold text-cyan-300 hover:bg-cyan-400/20 disabled:opacity-60"
+            >
+              {isCalling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PhoneCall className="h-3.5 w-3.5" />}
+              {isCalling ? "Calling..." : "Call Assistant"}
+            </motion.button>
+
+            <motion.button
+              type="button"
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => setIsVoiceModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-lime-400/70 bg-lime-400/15 px-3 py-1.5 text-xs font-semibold text-lime-300 hover:bg-lime-400/20"
+            >
+              <Mic className="h-3.5 w-3.5" />
+              Talk to your Twin
+            </motion.button>
+          </div>
         </div>
       </div>
 

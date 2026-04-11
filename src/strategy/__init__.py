@@ -1,0 +1,1 @@
+"""Strategy sharing module."""
