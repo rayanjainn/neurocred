@@ -1,4 +1,4 @@
-# fintwin  |  the cognitive msme digital twin & credit engine
+# fintwin  |  the cognitive digital twin & credit engine
 
 > a stateful, event-driven financial intelligence platform that builds a versioned "digital twin" of a business using multi-source signals (gst, upi, sms, emi) to drive cognitive credit decisions and proactive financial interventions.
 
