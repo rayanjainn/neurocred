@@ -16,6 +16,24 @@ nosetests.xml
 coverage.xml
 *.cover
 .hypothesis/
+*.egg-info/
+dist/
+build/
+
+# Node.js / Frontend
+node_modules/
+.next/
+.turbo/
+out/
+dist/
+build/
+pnpm-debug.log*
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+.flaskenv
 
 # Data & Models (Large Files)
 data/raw/
@@ -25,16 +43,34 @@ data/models/*.json
 *.parquet
 *.csv
 
-# Logs & Environment
+# Logs
 *.log
-.env
-.flaskenv
+logs/
+.pytest_cache/
 
-# IDEs
+# IDEs & Editors
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 .DS_Store
+Thumbs.db
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+
+# Testing
+coverage/
+htmlcov/
+.nyc_output/
 
 # Airavat Specifics
 /tmp/airavat-redis.log
 .pytest_cache/
+*.pid
