@@ -73,3 +73,19 @@ The dynamic limit adjustment is implemented as a **Temporal State Refresh**:
 2. **Batch Polars Sweep**: The engine scans all active Digital Twin states in Redis.
 3. **Sizing Recalculation**: If the `daily_avg_throughput_30d` has changed by $\pm 15\%$, a new `CreditScore` is calculated via XGBoost.
 4. **Limit Commit**: The new limit is pushed back to Redis, and if a reduction occurs, a `LIMIT_REDUCED_EVENT` is broadcasted to the notification engine.
+
+---
+
+## 8. Regulatory Compliance & Research Foundations
+
+The Cognitive Credit Engine is designed to align with the latest RBI mandates for MSME lending and the academic state-of-the-art in explainable machine learning.
+
+### 8.1 MSE Lending Policy (Feb 2026 Update)
+FinTwin aligns its credit sizing logic with the **RBI “Lending to Micro, Small & Medium Enterprises (MSME) Sector (Amendment) Directions, 2026”** (issued February 9, 2026).
+- **Collateral-Free Ceiling**: The engine supports collateral-free lending limits of up to **₹20 lakh** for MSEs, ensuring compliant priority sector lending (PSL) eligibility.
+- **Reference**: [RBI Master Directions – Lending to MSME Sector](https://www.rbi.org.in) | [Drishti IAS Summary](https://www.drishtiias.com/daily-updates/daily-news-analysis/rbi-enhances-collateral-free-lending-for-mses)
+
+### 8.2 Foundation Research Papers
+The engine's architecture is built upon the following peer-reviewed methodologies:
+- **XGBoost Inference**: *"XGBoost: A Scalable Tree Boosting System"* (Chen & Guestrin, 2016). Established the methodology for high-performance tabular financial scoring.
+- **SHAP Explainability**: *"A Unified Approach to Interpreting Model Predictions"* (Lundberg & Lee, 2017). Provides the mathematical foundation for the engine's waterfall traces and feature attributions.

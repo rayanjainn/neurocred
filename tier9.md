@@ -92,3 +92,14 @@ Tier 9 provides critical inputs to the Tier 7 Cognitive Engine:
 - `fraud_confidence`: Probability [0.0–1.0] of active deception.
 - `scam_probability`: Signal for active Social Engineering threats.
 - `pagerank_score`: Centrality metric for hub detection.
+
+---
+
+## 7. Research Foundations & Academic Compliance
+
+The Tier 9 deception engine is grounded in advanced research on temporal causal graphs and sequential fraud patterns.
+
+### 7.1 Key Research References
+- **Temporal-Causal GNNs**: *"Enhancing Credit Card Fraud Detection via Causal Temporal Graph Neural Network (CaT-GNN)"* (2024). This work validates our approach of using temporal-causal-attention over transaction paths to identify illicit loops in merchant-card flows. [arXiv:2402.14708v1](https://arxiv.org/html/2402.14708v1)
+- **Dynamic Graph Learning**: *"Real-time dynamic graph learning with temporal attention for financial transaction risk control"* (Frontiers in AI, 2026). Supports our use of continuous-time attention to capture periodic cycles in fraud-behavior paths. [Frontiers in AI](https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2026.1774013/full)
+- **Wavelet-Temporal Analytics**: *"Detecting illicit transactions in Bitcoin: a wavelet-temporal graph approach"* (Scientific Reports, 2026). Validates the combination of temporal-cyclical behavior with spectral methods to detect money-laundering-style cycles. [Nature Scientific Reports](https://www.nature.com/articles/s41598-025-23901-3)

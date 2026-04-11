@@ -224,3 +224,25 @@ Financial‑ratios checked by banks (e.g., **debt‑equity‑ratio**, **current�
 - Regulated‑entities must collect **economic‑profile** (age, occupation, income) before‑loan. [web:46]  
 - **Key‑Fact‑Statement (KFS)** mandatory for all digital‑loans; digitally‑signed‑docs sent to borrower‑via‑SMS/email. [web:46]  
 - **Cooling‑off‑period** ≥ 1 day
+
+---
+
+## 10. Temporal-cycle-detection in financial-transaction-graphs
+
+The FinTwin engine utilizes temporal causality to distinguish between legitimate business flows and fraudulent circular trading.
+
+- **RBI-collateral-free-loan-update (Feb 2026 – ₹20 lakh for MSEs):**  
+  As per RBI's *Lending to MSME Sector (Amendment) Directions, 2026*:  
+  - Official Reference: [RBI Master Directions – Lending to MSME Sector (latest amendments)](https://www.rbi.org.in)  
+  - Summary: [RBI enhances collateral-free lending for MSEs (Drishti IAS)](https://www.drishtiias.com/daily-updates/daily-news-analysis/rbi-enhances-collateral-free-lending-for-mses)  
+
+- **Peer-reviewed-papers on temporal-cycle-detection using temporal-causality:**  
+  - **Real-time dynamic graph learning with temporal attention for financial transaction risk control:**  
+    Models streaming transaction graphs with temporal-encoding and continuous-time-attention transformers (C2GAT) to capture causal-temporal patterns and periodic cycles.  
+    [Frontiers in AI (2026)](https://www.frontiersin.org/journals/artificial-intelligence/articles/10.3389/frai.2026.1774013/full)  
+  - **Enhancing Credit Card Fraud Detection via Causal Temporal Graph Neural Network (CaT-GNN):**  
+    Introduces CaT-GNN that uses temporal-causal-attention over transaction graphs to identify causal-transaction-paths and temporal-cycles.  
+    [arXiv:2402.14708v1](https://arxiv.org/html/2402.14708v1)  
+  - **Detecting illicit transactions in Bitcoin: a wavelet-temporal graph approach:**  
+    Combines temporal-cyclical-behavior with wavelet-based spectral-methods to detect money-laundering-style financial-cycles.  
+    [Scientific Reports (Nature, 2026)](https://www.nature.com/articles/s41598-025-23901-3)
