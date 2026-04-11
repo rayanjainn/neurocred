@@ -73,7 +73,7 @@ graph LR
 | category | resources |
 |---|---|
 | **core foundations** | [mathematical foundations](Math.md), [technical schemas](Schema.md), [regulatory theory](Theory.md), [synthetic data strategy](Data.md) |
-| **tier summaries** | [t1: ingestion](tier1.md), [t2: nlp classifier](tier2.md), [t3: feature engine](tier3.md), [t4: digital twin](tier4.md), [t6: risk simulation](tier6.md) |
+| **tier summaries** | [t1: ingestion](tier1.md), [t2: nlp classifier](tier2.md), [t3: feature engine](tier3.md), [t4: digital twin](tier4.md), [t6: risk simulation](tier6.md), [t7: credit engine](tier7.md), [t9: anomaly detection](tier9.md) |
 
 ---
 
