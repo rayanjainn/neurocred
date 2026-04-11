@@ -80,8 +80,8 @@ export default function LoginPage() {
       <div className="absolute inset-0 bg-black/35" />
 
       <div className="relative z-10 w-full h-full lg:h-[90vh] lg:max-h-none lg:max-w-7xl lg:rounded-2xl border border-[#c8ff00]/70 bg-card/90 shadow-2xl grid grid-cols-1 lg:grid-cols-[1fr_1fr] overflow-hidden backdrop-blur-sm">
-        <div className="p-6 sm:p-8 lg:p-10 flex items-center overflow-hidden">
-          <div className="w-full max-w-md mx-auto pr-1">
+        <div className="p-6 sm:p-8 lg:p-10 flex flex-col overflow-y-auto">
+          <div className="w-full max-w-md mx-auto my-auto pr-1">
             {/* <div className="text-center mb-8">
             <div className="flex items-center justify-center gap-2 mb-2">
               <Shield className="w-6 h-6 text-primary" />

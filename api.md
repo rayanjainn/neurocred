@@ -710,3 +710,220 @@ This document outlines all the available API endpoints in the Airavat backend (F
     "status": "ok"
   }
   ```
+
+---
+
+## Tier 6: Predictive Risk Simulation Engine
+
+### 39. Run Monte Carlo Simulation
+
+- **Endpoint**: `/simulation/run`
+- **Method**: `POST`
+- **Description**: Run a full correlated Monte Carlo simulation (1,000 paths × up to 180 days) using GARCH(1,1) volatility, t-Copula shocks, EMI cascade model, Sobol quasi-random + antithetic variance reduction. Returns fan chart, EWS, temporal projections, recovery plan, and optional counterfactual analysis. Results are cached in Redis and the Digital Twin is updated.
+- **Request Body**:
+  ```json
+  {
+    "user_id": "u_0001",
+    "twin_snapshot": {
+      "income_stability": 0.65,
+      "spending_volatility": 0.35,
+      "liquidity_health": "MEDIUM",
+      "risk_score": 0.41,
+      "cash_buffer_days": 14.0,
+      "emi_monthly": 15000,
+      "emi_overdue_count": 0,
+      "cash_balance_current": 42000,
+      "cascade_susceptibility": 0.45,
+      "persona": "genuine_struggling",
+      "income_monthly": 50000,
+      "essential_expense_monthly": 20000,
+      "discretionary_expense_monthly": 10000,
+      "overdraft_limit": 5000
+    },
+    "horizon_days": null,
+    "num_simulations": 1000,
+    "scenario": {
+      "type": "compound",
+      "components": ["C_JOB_MEDICAL"],
+      "start_day": 0,
+      "custom_params": {}
+    },
+    "variance_reduction": { "sobol": true, "antithetic": true },
+    "run_counterfactual": true,
+    "counterfactual_id": "CF_EARLIER_RESTRUC",
+    "counterfactual_lookback_days": 30,
+    "seed": null
+  }
+  ```
+- **Response Shape**:
+  ```json
+  {
+    "user_id": "u_0001",
+    "simulation_id": "sim_20260411_152301_a7f3",
+    "seed": 8834712,
+    "horizon_days": 90,
+    "num_paths": 1000,
+    "variance_reduction_applied": ["sobol_512", "antithetic"],
+    "effective_precision_equivalent": 4000,
+    "default_probability": 0.31,
+    "temporal_projections": {
+      "day_30": { "default_probability": 0.04, "liquidity_crash_days_mean": null, "emi_stress_score": 0.12, "net_worth_delta_mean": -4500 },
+      "day_60": { "default_probability": 0.18, "liquidity_crash_days_mean": 52, "emi_stress_score": 0.28, "net_worth_delta_mean": -12000 },
+      "day_90": { "default_probability": 0.31, "liquidity_crash_days_mean": 24, "emi_stress_score": 0.43, "net_worth_delta_mean": -22800 }
+    },
+    "var_95": -87400,
+    "cvar_95": -142800,
+    "ews": {
+      "ews_7d": 0.19,
+      "ews_14d": 0.38,
+      "ews_30d": 0.54,
+      "severity": "ORANGE",
+      "trigger_recommendation": "EMI_AT_RISK_ALERT + MICRO_LOAN_PRE_QUALIFY"
+    },
+    "liquidity_crash_days": { "mean": 24, "p10": 9, "p50": 22, "p90": 51 },
+    "emi_stress_score": 0.43,
+    "net_worth_delta_90d": { "mean": -22800, "p10": -68400, "p50": -18200, "p90": 4100 },
+    "regime_distribution_at_90d": { "STABLE": 0.09, "STRESSED": 0.52, "CRISIS": 0.39 },
+    "fan_chart": { "horizon_days": 90, "p10": [...], "p25": [...], "p50": [...], "p75": [...], "p90": [...] },
+    "cascade_analysis": {
+      "paths_reaching_stage1": 0.28,
+      "paths_reaching_stage2": 0.14,
+      "paths_reaching_stage3": 0.06,
+      "paths_reaching_stage4": 0.02,
+      "systemic_stress_flag": false
+    },
+    "recovery_plan": {
+      "plan_id": "rp_auto_1234",
+      "steps": [
+        { "step": 1, "day": 0, "action": "A_EMI_RESTRUC", "description": "EMI restructuring (extend tenure)", "daily_cf_delta": 300, "success_probability": 0.80 }
+      ],
+      "projected_regime_at_45d": "STABLE",
+      "recovery_probability_full_compliance": 0.79,
+      "recovery_probability_50pct_compliance": 0.51,
+      "recovery_probability_no_action": 0.22,
+      "alternative_step3": { "action": "A_MICRO_LOAN", "loan_amount": 20000, "trigger_day": 35 }
+    },
+    "counterfactual": {
+      "scenario": "CF_EARLIER_RESTRUC",
+      "lookback_days": 30,
+      "actual_state_today": { "risk_score": 0.41, "cash_buffer_days": 14, "regime": "STRESSED" },
+      "counterfactual_state_today": { "risk_score": 0.27, "cash_buffer_days": 21, "regime": "STABLE" },
+      "value_of_earlier_intervention": { "penalty_interest_avoided": 6200, "cash_buffer_gained_days": 7, "risk_score_improvement": 0.14, "crisis_probability_avoided": 0.21 }
+    },
+    "twin_update_emitted": true,
+    "timestamp": "2026-04-11T15:23:04Z"
+  }
+  ```
+
+### 40. Get Cached Simulation Result
+
+- **Endpoint**: `/simulation/{sim_id}`
+- **Method**: `GET`
+- **Description**: Retrieve a previously run simulation result by its `simulation_id`. Results are cached for 24 hours.
+- **Query Parameters**:
+  - `user_id` (str, required): User identifier for cache key lookup.
+- **Response Shape**: Same as `/simulation/run` response.
+
+### 41. Early Warning Score Snapshot
+
+- **Endpoint**: `/simulation/ews/{user_id}`
+- **Method**: `GET`
+- **Description**: Return the latest Early Warning Score snapshot for a user. Populated after the most recent simulation run. Severity bands: GREEN (0–0.15), AMBER (0.15–0.30), ORANGE (0.30–0.55), RED (>0.55).
+- **Response Shape**:
+  ```json
+  {
+    "user_id": "u_0001",
+    "computed_at": "2026-04-11T15:23:04Z",
+    "ews_7d": 0.19,
+    "ews_14d": 0.38,
+    "ews_30d": 0.54,
+    "severity": "ORANGE",
+    "leading_indicators": [
+      "Spending volatility up 18% vs 30d baseline",
+      "2 debit failures in last 7 days"
+    ],
+    "simulation_id_source": "sim_20260411_152301_a7f3"
+  }
+  ```
+
+### 42. Fan Chart Cache
+
+- **Endpoint**: `/simulation/fan/{user_id}`
+- **Method**: `GET`
+- **Description**: Return cached daily cash path percentiles for dashboard fan chart rendering. P10=crimson, P25=amber, P50=white (median), P75=acid, P90=acid dashed.
+- **Response Shape**:
+  ```json
+  {
+    "simulation_id": "sim_20260411_152301_a7f3",
+    "horizon_days": 90,
+    "today_index": 0,
+    "currency": "INR",
+    "fan_chart": {
+      "p10": [42000, 38200, 34100],
+      "p25": [42000, 40100, 38400],
+      "p50": [42000, 41800, 41200],
+      "p75": [42000, 43200, 44100],
+      "p90": [42000, 44800, 47200]
+    }
+  }
+  ```
+
+### 43. List Stress Scenarios
+
+- **Endpoint**: `/simulation/scenarios`
+- **Method**: `GET`
+- **Description**: List all available stress scenarios grouped by type. Pass scenario IDs in `components` field of `/simulation/run` request.
+- **Response Shape**:
+  ```json
+  {
+    "atomic": {
+      "S_INC_DROP_20": "Mild income shock",
+      "S_INC_DROP_50": "Severe income shock",
+      "S_JOB_LOSS": "Job loss",
+      "S_EXP_SURGE_30": "Expense surge",
+      "S_MEDICAL": "Medical emergency",
+      "S_RATE_HIKE": "Interest rate hike (RBI)",
+      "S_FRAUD": "Account freeze / fraud"
+    },
+    "compound": {
+      "C_JOB_MEDICAL": "Job loss + Medical emergency",
+      "C_RATE_STRESS": "Rate hike + Expense surge",
+      "C_FRAUD_LOSS": "Fraud + Mild income drop",
+      "C_FULL_STRESS": "Full stress (regulatory worst-case)"
+    },
+    "cascading": {
+      "CA_INCOME_EMI": "Income drop → EMI cascade",
+      "CA_FRAUD_SPIRAL": "Fraud → income spiral",
+      "CA_LIFESTYLE_DEBT": "Lifestyle inflation → expense surge"
+    }
+  }
+  ```
+
+### 44. List Counterfactual Scenarios
+
+- **Endpoint**: `/simulation/counterfactuals`
+- **Method**: `GET`
+- **Description**: List available counterfactual scenario IDs and the questions they answer for the "What would have happened?" audit panel.
+- **Response Shape**:
+  ```json
+  {
+    "CF_EARLIER_RESTRUC": "What if EMI restructuring had been offered 30 days ago?",
+    "CF_MICRO_LOAN_15": "What if a ₹20,000 micro-loan had been disbursed 15 days ago?",
+    "CF_DISC_CUT_60": "What if discretionary cut had started 60 days ago?",
+    "CF_NO_INTERVENTION": "What would have happened without any interventions?"
+  }
+  ```
+
+### 45. Simulation Engine Health
+
+- **Endpoint**: `/simulation/health`
+- **Method**: `GET`
+- **Description**: Check simulation engine module availability and Redis connectivity.
+- **Response Shape**:
+  ```json
+  {
+    "status": "ok",
+    "engine": "loaded",
+    "redis": "ok"
+  }
+  ```
