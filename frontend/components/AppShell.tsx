@@ -259,7 +259,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <aside
           className={cn(
             "sticky top-0 h-screen overflow-hidden hidden md:flex shrink-0 border-r border-white/20 bg-background/60 backdrop-blur-2xl shadow-[8px_0_32px_rgba(0,0,0,0.25)] transition-all duration-300 z-50",
-            sidebarCollapsed ? "w-20" : "w-72",
+            sidebarCollapsed ? "w-20" : "w-64",
           )}
         >
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/14 via-white/6 to-transparent dark:from-white/8 dark:via-white/4 dark:to-transparent" />
