@@ -302,21 +302,32 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </nav>
             </ScrollArea>
 
-            <div className="border-t border-white/15 p-2">
+            <div className="border-t border-white/15 p-3 space-y-1.5">
               <Button
                 type="button"
                 variant="ghost"
-                size="sm"
+                onClick={handleLogout}
+                className={cn(
+                  "w-full text-foreground/80 hover:bg-destructive/10 hover:text-destructive transition-colors rounded-lg",
+                  sidebarCollapsed ? "justify-center px-0" : "justify-start gap-3 px-3"
+                )}
+                title="Log out"
+              >
+                <LogOut className="w-5 h-5 shrink-0" />
+                {!sidebarCollapsed && <span className="text-[15px] font-semibold">Log out</span>}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
                 onClick={() => setSidebarCollapsed((v) => !v)}
                 className={cn(
-                  "w-full border border-white/20 bg-white/10 hover:bg-white/20",
-                  sidebarCollapsed ? "justify-center" : "justify-start gap-2"
+                  "w-full text-foreground/80 hover:bg-muted hover:text-foreground transition-colors rounded-lg",
+                  sidebarCollapsed ? "justify-center px-0" : "justify-start gap-3 px-3"
                 )}
-                aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
-                {sidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-                {!sidebarCollapsed && <span className="text-sm">Collapse</span>}
+                {sidebarCollapsed ? <ChevronRight className="w-5 h-5 shrink-0" /> : <ChevronLeft className="w-5 h-5 shrink-0" />}
+                {!sidebarCollapsed && <span className="text-[15px] font-semibold">Collapse menu</span>}
               </Button>
             </div>
           </div>
