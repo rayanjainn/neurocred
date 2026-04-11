@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -27,6 +28,8 @@ import redis.asyncio as aioredis
 from config.settings import settings
 from src.ingestion.generator import event_stream
 from src.ingestion.schemas import CanonicalEvent
+
+logger = logging.getLogger("airavat.producer")
 
 STREAM_RAW = "stream:raw_ingestion"
 
@@ -72,15 +75,22 @@ async def _ensure_groups(client: aioredis.Redis) -> None:
 
 
 async def produce(
-    n_profiles: int = 250,
-    history_months: int = 12,
+    n_profiles: int = settings.n_profiles,
+    history_months: int = settings.history_months,
     verbose: bool = True,
+    clear_existing: bool = True,
 ) -> int:
     """
     Generate synthetic events and publish to Redis Streams.
     Returns total events published.
     """
     client = aioredis.from_url(settings.redis_url, decode_responses=True)
+
+    if clear_existing:
+        logger.info(f"[producer] clearing stream {STREAM_RAW}")
+        await client.delete(STREAM_RAW)
+        for s in PROVENANCE_TO_STREAM.values():
+            await client.delete(s)
 
     try:
         await client.ping()
