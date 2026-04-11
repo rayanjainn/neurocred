@@ -1,4 +1,5 @@
 # howisthedatamade_f2.md — Agentic‑AI Financial Digital Twin & Cognitive Credit Engine
+Related Tiers: Tier 1 (Signal Ingestion), Tier 2 (Event Stream Processor), Tier 3 (Behavioural Feature Engine), Tier 9 (Anomaly & Deception Detection)
 
 **Table of contents**
 

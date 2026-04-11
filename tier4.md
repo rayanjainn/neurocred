@@ -1,4 +1,5 @@
 # howisthedatamade_digitaltwin.md — Agentic-AI Financial Digital Twin & Cognitive Credit Engine (Stateful Versioned Implementation Spec)
+Related Tiers: Tier 4 (Digital Twin State Layer)
 
 **Table of contents**
 1. [Schema references & compliance](#1-schema-references--compliance)

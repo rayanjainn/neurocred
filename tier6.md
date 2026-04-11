@@ -3,6 +3,7 @@ Here is the clean, professional, and consistent **.md** file in the exact same s
 ---
 
 # how_risk_simulation_engine_f2.md — Predictive Risk Simulation Engine (Tier 6)
+Related Tiers: Tier 6 (Predictive Risk Simulation)
 
 **Agentic-AI Financial Digital Twin & Cognitive Credit Engine**
 

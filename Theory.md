@@ -1,4 +1,5 @@
 # Agentic‑AI Financial Digital Twin & Cognitive Credit Engine
+Related Tiers: Tier 7 (Cognitive Credit Engine)
 
 This document captures the regulatory, structural, and operational knowledge underlying **MSME and consumer credit** in India, contextualised for an **Agentic‑AI Real‑Time Financial Behavioural Digital Twin and Cognitive Credit Engine** (F‑2 style). It reconciles authoritative sources: the **Ministry of MSME “Know Your Lender 2025” handbook**, the **Reserve Bank of India’s MSME credit‑policy framework**, and key **research‑papers on digital‑financial‑twins, synthetic‑data, and agentic‑AI‑risk‑simulation**. [web:46][web:55][web:58][web:61]  
 All **behaviour‑based bands, limit‑recommendations, and eligibility‑rules** in your pipeline are derived from these official‑policy documents and research baselines. [web:46][web:55]

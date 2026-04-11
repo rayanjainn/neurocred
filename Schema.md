@@ -1,4 +1,5 @@
 # schema.md — Personal Finance Multi-Source Ingestion & Feature Engineering
+Related Tiers: Tier 1 (Signal Ingestion), Tier 2 (Event Stream Processor), Tier 3 (Behavioural Feature Engine)
 
 **Description**: Explicit JSON schema layouts and Redis stream field constraints fed directly into the Polars feature engine. Payloads must strictly adhere to these definitions.
 

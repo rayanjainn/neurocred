@@ -1,4 +1,5 @@
 # Math.md — Mathematical Foundations
+Related Tiers: Tier 2 (Event Stream Processor), Tier 3 (Behavioural Feature Engine), Tier 6 (Predictive Risk Simulation), Tier 7 (Cognitive Credit Engine)
 
 This document defines all mathematical equations, algorithms, and formulas used in the personal finance intelligence engine across the 10 layers.
 
