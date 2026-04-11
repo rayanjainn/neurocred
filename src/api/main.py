@@ -26,6 +26,15 @@ Tier 7 — Cognitive Credit Engine endpoints:
   - GET  /credit/{user_id}/status     — latest credit state from 24h recalibration cache
   - POST /credit/audit/replay         — point-in-time feature replay (RBI compliance)
   - GET  /credit/health               — model load status + queue depth
+
+Tier 6 — Predictive Risk Simulation Engine endpoints:
+  - POST /simulation/run              — run full Monte Carlo simulation
+  - GET  /simulation/{sim_id}         — retrieve cached simulation result
+  - GET  /simulation/ews/{user_id}    — latest EWS snapshot (streaming endpoint)
+  - GET  /simulation/fan/{user_id}    — cached fan chart for dashboard
+  - GET  /simulation/scenarios        — list available stress scenarios
+  - GET  /simulation/counterfactuals  — list available counterfactual scenarios
+  - GET  /simulation/health           — engine health check
 """
 
 from __future__ import annotations
@@ -1247,6 +1256,210 @@ async def vigilance_stream_status() -> dict[str, Any]:
         "stream_length": stream_len,
         "status":       "ok",
     }
+
+
+# ── Tier 6: Predictive Risk Simulation Engine ─────────────────────────────────
+
+@app.post("/simulation/run")
+async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Run a full Monte Carlo risk simulation for a user.
+
+    Request body mirrors SimulationRequest dataclass:
+      {
+        "user_id": "u_0001",
+        "twin_snapshot": {
+          "income_stability": 0.65,
+          "spending_volatility": 0.35,
+          "liquidity_health": "MEDIUM",
+          "risk_score": 0.41,
+          "cash_buffer_days": 14.0,
+          "emi_monthly": 15000,
+          "emi_overdue_count": 0,
+          "cash_balance_current": 42000,
+          "cascade_susceptibility": 0.45,
+          "persona": "genuine_struggling",
+          "income_monthly": 50000,
+          "essential_expense_monthly": 20000,
+          "discretionary_expense_monthly": 10000,
+          "overdraft_limit": 5000
+        },
+        "horizon_days": null,
+        "num_simulations": 1000,
+        "scenario": {
+          "type": "compound",
+          "components": ["C_JOB_MEDICAL"],
+          "start_day": 0,
+          "custom_params": {}
+        },
+        "variance_reduction": {"sobol": true, "antithetic": true},
+        "run_counterfactual": true,
+        "counterfactual_id": "CF_EARLIER_RESTRUC",
+        "counterfactual_lookback_days": 30,
+        "seed": null
+      }
+    """
+    import asyncio
+    from src.simulation.engine import (
+        SimulationRequest, TwinSnapshot, VarianceReduction, run_simulation
+    )
+    from src.simulation.scenario_library import ScenarioSpec
+    from src.simulation.output_emitter import emit_simulation_completed
+
+    user_id = body.get("user_id", "unknown")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    # Parse twin snapshot
+    ts_raw = body.get("twin_snapshot", {})
+    twin = TwinSnapshot(
+        income_stability=float(ts_raw.get("income_stability", 0.65)),
+        spending_volatility=float(ts_raw.get("spending_volatility", 0.35)),
+        liquidity_health=ts_raw.get("liquidity_health", "MEDIUM"),
+        risk_score=float(ts_raw.get("risk_score", 0.35)),
+        cash_buffer_days=float(ts_raw.get("cash_buffer_days", 14.0)),
+        emi_monthly=float(ts_raw.get("emi_monthly", 15000.0)),
+        emi_overdue_count=int(ts_raw.get("emi_overdue_count", 0)),
+        cash_balance_current=float(ts_raw.get("cash_balance_current", 40000.0)),
+        cascade_susceptibility=float(ts_raw.get("cascade_susceptibility", 0.45)),
+        persona=ts_raw.get("persona", "unknown"),
+        income_monthly=float(ts_raw.get("income_monthly", 50000.0)),
+        essential_expense_monthly=float(ts_raw.get("essential_expense_monthly", 20000.0)),
+        discretionary_expense_monthly=float(ts_raw.get("discretionary_expense_monthly", 10000.0)),
+        overdraft_limit=float(ts_raw.get("overdraft_limit", 5000.0)),
+    )
+
+    # Parse scenario
+    sc_raw = body.get("scenario", {})
+    scenario = ScenarioSpec(
+        type=sc_raw.get("type", "baseline"),
+        components=sc_raw.get("components", []),
+        start_day=sc_raw.get("start_day", 0),
+        duration_override=sc_raw.get("duration_override"),
+        custom_params=sc_raw.get("custom_params", {}),
+    )
+
+    vr_raw = body.get("variance_reduction", {})
+    vr = VarianceReduction(
+        sobol=bool(vr_raw.get("sobol", True)),
+        antithetic=bool(vr_raw.get("antithetic", True)),
+    )
+
+    req = SimulationRequest(
+        user_id=user_id,
+        twin_snapshot=twin,
+        horizon_days=body.get("horizon_days"),
+        num_simulations=int(body.get("num_simulations", 1000)),
+        scenario=scenario,
+        variance_reduction=vr,
+        run_counterfactual=bool(body.get("run_counterfactual", True)),
+        counterfactual_id=body.get("counterfactual_id", "CF_EARLIER_RESTRUC"),
+        counterfactual_lookback_days=int(body.get("counterfactual_lookback_days", 30)),
+        seed=body.get("seed"),
+    )
+
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, run_simulation, req)
+
+    redis: aioredis.Redis = app.state.redis
+    await emit_simulation_completed(redis, user_id, result)
+
+    return result
+
+
+@app.get("/simulation/scenarios")
+async def list_scenarios() -> dict[str, Any]:
+    """
+    List all available stress scenarios grouped by type (atomic, compound, cascading).
+    """
+    from src.simulation.scenario_library import list_scenarios
+    return list_scenarios()
+
+
+@app.get("/simulation/counterfactuals")
+async def list_counterfactuals() -> dict[str, str]:
+    """
+    List available counterfactual scenario IDs and the questions they answer.
+    """
+    from src.simulation.counterfactual import list_counterfactuals
+    return list_counterfactuals()
+
+
+@app.get("/simulation/health")
+async def simulation_health() -> dict[str, Any]:
+    """
+    Simulation engine health check.
+    Reports module availability and Redis connectivity.
+    """
+    health: dict[str, Any] = {"status": "ok"}
+    try:
+        import importlib
+        for mod in ("src.simulation.engine", "src.simulation.regime",
+                    "src.simulation.garch", "src.simulation.correlation",
+                    "src.simulation.cascade"):
+            importlib.import_module(mod)
+        health["engine"] = "loaded"
+    except Exception as exc:
+        health["engine"] = f"error: {exc}"
+        health["status"] = "degraded"
+
+    redis: aioredis.Redis = app.state.redis
+    try:
+        await redis.ping()
+        health["redis"] = "ok"
+    except Exception:
+        health["redis"] = "down"
+        health["status"] = "degraded"
+
+    return health
+
+
+@app.get("/simulation/ews/{user_id}")
+async def get_ews_snapshot(user_id: str) -> dict[str, Any]:
+    """
+    Return latest Early Warning Score snapshot for a user.
+    Populated after the most recent simulation run.
+    """
+    from src.simulation.output_emitter import get_ews_snapshot
+    redis: aioredis.Redis = app.state.redis
+    ews = await get_ews_snapshot(redis, user_id)
+    if ews is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No EWS snapshot found for user {user_id}. Run a simulation first."
+        )
+    return ews
+
+
+@app.get("/simulation/fan/{user_id}")
+async def get_fan_chart(user_id: str) -> dict[str, Any]:
+    """
+    Return cached fan chart data for dashboard rendering.
+    Keys: p10, p25, p50, p75, p90 as daily cash series arrays.
+    """
+    from src.simulation.output_emitter import get_fan_chart
+    redis: aioredis.Redis = app.state.redis
+    fan = await get_fan_chart(redis, user_id)
+    if fan is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No fan chart found for user {user_id}. Run a simulation first."
+        )
+    return fan
+
+
+@app.get("/simulation/{sim_id}")
+async def get_simulation_result(sim_id: str, user_id: str) -> dict[str, Any]:
+    """
+    Retrieve a cached simulation result by simulation_id.
+    Requires user_id as query parameter for cache key lookup.
+    """
+    from src.simulation.output_emitter import get_cached_simulation
+    redis: aioredis.Redis = app.state.redis
+    result = await get_cached_simulation(redis, user_id, sim_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Simulation {sim_id} not found for user {user_id}")
+    return result
 
 
 if __name__ == "__main__":
