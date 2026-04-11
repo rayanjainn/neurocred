@@ -66,24 +66,39 @@ To differentiate between a human user or business owner and an automated "Money 
 
 ---
 
-## 5. Behavioural Anomaly Detection (Statistical Outlayers)
+## 5. Behavioural Anomaly Detection (Statistical Outliers)
 
-Tier 9 monitors individual user trajectories ($\Delta_{\text{Twin}}$) to detect anomalies that simple rules might miss.
+Tier 9 monitors user trajectories ($\Delta_{\text{Twin}}$) with **observer‑aligned‑time‑windows** (30d/90d) and **graph‑aware‑rolling‑measures**.
+
+---
 
 ### 5.1 Hidden Financial Stress Signals
-The engine looks for **temporal autocorrelation** in negative behavioral shifts:
-- **Liquidity Decay**: A progressive narrowing of `cash_buffer_days` over a 90-day window, even if the absolute balance remains positive.
-- **Velocity Stress**: Sudden spikes in `debit_failure_rate_90d` across multiple payment channels simultaneously.
+
+| Aspect | FinTwin choice | Alternative approaches | Advantage of FinTwin |
+| --- | --- | --- | --- |
+| **Core mechanism** | Polars‑based rolling‑statistics over `bank_balance`, `UPI_debit_failure_rate`, `SMS_low_balance_alert_freq` to compute `cash_buffer_days` trend and `velocity_stress` spike. | Static thresholds on `balance < X` or `failed‑txns > Y`. | Captures **gradual‑liquidity‑decay**; not sensitive to one‑off‑drops or seasonal‑peaks. |
+| **Model layer** | Lightweight Logistic‑Regressor on rolling‑features for `stress_confidence_score ∈ [0,1]`. | Full‑Transformer‑sequence‑model on raw‑transaction‑sequence. | Much‑lower‑latency, **<10ms**; keeps Tier‑9 real‑time while preserving trend‑signal. |
+| **Audit‑trace** | `stress_confidence_score` + raw rolling‑series exposed to Tier‑6/7 via JSON‑trace. | Binary‑fraud‑flag with no gradient‑signal. | Integrates cleanly into **Tier‑6‑recovery‑path‑simulator** and **Tier‑7‑Trust‑Score** as a calibrated‑stress‑signal. |
+
+---
 
 ### 5.2 Progressive Income Underreporting
-By cross-referencing **Internal Cash Velocity** (UPI/Bank) against the **External Twin Archetype**, the engine identifies discrepancies:
-- If a user's transaction throughput is $3 \times$ higher than their reported income or peer cohort average, it flags **Underreporting Risk**, affecting the "Trust Score" in Tier 7.
+
+| Aspect | FinTwin choice | Alternative approaches | Advantage of FinTwin |
+| --- | --- | --- | --- |
+| **Core mechanism** | `observed_income_proxy` (sum‑credited‑non‑P2P‑sources‑90d) vs `declared_income_proxy`, scaled via **cohort‑average‑income‑per‑MSME‑sector‑and‑city‑tier** (Polars‑group‑by). | Direct‑rule‑based‑ratio‑threshold (“if‑observed‑income‑>‑2×‑declared‑income, flag‑underreporting”). | Adapts to **seasonal‑/project‑based‑MSMEs**; avoids false‑positives from legitimate‑income‑spikes. |
+| **Model layer** | `income_underreport_score = sigmoid( (observed_income − declared_income) / std_peer_income )` + Polars‑cohort‑scaling. | Isolation‑Forest‑only‑anomaly‑model. | Produces **calibrated‑probability‑like‑score**, not just “anomaly‑yes/no”; easier‑to‑map‑to‑Tier‑7‑Trust‑Score. |
+| **Integration** | Signal reused from **Tier‑7‑feature‑engine**; no‑duplicate‑feature‑pipeline. | Separate‑income‑tracking‑pipeline. | Re‑use‑of‑existing‑engine keeps **maintenance‑cost‑low** and **cohorts‑synchronized**. |
+
+---
 
 ### 5.3 Identity & Behaviour Shifts
-Detects sudden, statistically improbable shifts in the user's "Digital DNA":
-- **Category Drift**: A jump in the `merchant_category_shift_count` (e.g., sudden high-value spend in categories outside their personal or Peer Cohort's norm).
-- **Inflation of Discretionary Ratio**: Identifying "Lifestyle Creep" that signals a baseline shift in business sustainability.
 
+| Aspect | FinTwin choice | Alternative approaches | Advantage of FinTwin |
+| --- | --- | --- | --- |
+| **Core mechanism** | Polars‑rolling‑category‑histograms: `category_mix_30d` vs `category_mix_90d`; `discretionary_ratio_30d`; `JS‑divergence`‑based‑`category_drift_score`. | Manual‑category‑label‑thresholds (“if‑spend‑>‑X‑in‑Category‑Y‑flag‑identity‑shift”). | Detects **sub‑category‑mix‑shifts** (e.g., education‑to‑real‑estate) instead of coarse‑buckets. |
+| **Model layer** | XGBoost on Tier‑3‑feature‑engine outputs (`category_drift_score`, `discretionary_ratio_change`, `new_merchant_cluster_count`, `device_change_indicator`) → `identity_shift_score ∈ [0,1]`. | GNN‑only‑identity‑shift‑model. | XGBoost‑on‑rolling‑features is **lighter‑to‑run**, **easier‑to‑audit**, and **shares‑feature‑engineering** with Tier‑3/7. |
+| **Audit‑trace** | `identity_shift_score` + `JS‑divergence‑heat‑maps` in dashboard show **“spending‑DNA‑shift‑vs‑past‑3‑months”**. | Single‑category‑boolean‑flag. | **Mathematically‑clean**, **visually‑interpretable** signal for both **Tier‑10‑dashboard** and **RBI‑audit‑traces**. |
 ---
 
 ## 6. Decision Outputs
