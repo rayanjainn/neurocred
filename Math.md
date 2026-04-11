@@ -75,6 +75,8 @@ $$
 \text{EOM Liquidity Dip} = \frac{1}{N} \sum_{m=1}^{N} (\text{Balance}_{\text{end of month } m} - \text{Balance}_{25\text{th of month } m})
 $$
 
+
+
 ## 3. Behavioural & Ratio Features (Tier 3)
 
 Spending Volatility Index:
@@ -175,15 +177,43 @@ $$
 Composite example (can feed into ML model):
 
 $$
-\text{Health Score} = w_1(1 - \text{EMI Burden Ratio}) + w_2 \cdot \text{Savings Rate} + w_3 \cdot \text{Income Stability Score} - w_4 \cdot \text{Spending Volatility Index} - w_5 \cdot |z_{\text{Peer}}|
+\text{Health Score} = w_1(1 - \text{emi\_burden\_ratio}) + w_2 \cdot \text{savings\_rate} + w_3 \cdot \text{income\_stability\_score} - w_4 \cdot \text{spending\_volatility\_index} - w_5 \cdot |z_{\text{peer}}|
 $$
 
-**Typical starting weights** (normalize to sum ≈ 1.0):
-- EMI Burden: 0.22
-- Savings Rate: 0.20
-- Income Stability: 0.15
-- Spending Volatility: 0.12
-- Peer Deviation & others: remaining weight
+**Typical starting weights** (normalize to sum $\approx$ 1.0):
+- `emi_burden_ratio`: 0.22  
+- `savings_rate`: 0.20  
+- `income_stability_score`: 0.15  
+- `spending_volatility_index`: 0.12  
+- `peer_cohort_benchmark_deviation`: remaining weight
+
+### 7.2 Expected Loss (EL) Scoring
+Recommendation amounts are capped by the acceptable expected loss:
+
+$$
+EL = PD \times LGD \times EAD
+$$
+
+where:
+- $PD$: Probability of Default (from XGBoost).
+- $LGD$: Loss Given Default (standardized at 0.45 for unsecured MSME).
+- $EAD$: Exposure at Default (the eligible loan amount).
+
+### 7.3 Credit Score Mapping (300–900)
+To align with industry standards, the $PD$ is inversely mapped to a 300–900 scale:
+
+$$
+\text{Score} = \text{clip}\left(900 - (PD \times 600), 300, 900\right)
+$$
+
+### 7.4 Behavioural Trajectory & Override ($\Delta_{\text{Twin}}$)
+The Cognitive Engine identifies users with improving trajectories based on the first derivative (slope) of the Digital Twin state:
+
+$$
+\Delta_{\text{Twin}} = \sum_{f \in \{\text{savings\_rate, income\_stability\_score}\}} \omega_f \frac{\partial f}{\partial t}
+$$
+
+A positive $\Delta_{\text{Twin}} > \tau$ enables a **Behavioural Credit Override**, allowing for limit increases or rate reductions for thin-file users.
 
 ## 8. Additional Supporting Formulas
 
