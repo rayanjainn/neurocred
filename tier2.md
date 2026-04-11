@@ -27,7 +27,9 @@ We have selected the **`all-MiniLM-L6-v2`** model from the Sentence-Transformers
 - **Contextual Awareness**: Unlike static word vectors, it understands the relationship between tokens, correctly identifying that "Reliance Fresh" and "Generic Grocery Store" belong to `GROCERIES`.
 
 ### 2.2 The "Anchor" Methodology
+
 Instead of a lookup table, we define **Semantic Anchors** for each target category (e.g., `DINING`, `BILLS`, `SALARY`).
+
 1. **Category Vector**: We pre-compute the mean embedding for a set of descriptive keywords for each category.
 2. **Real-time Projection**: The raw `merchant_name` is encoded into a vector $v_{m}$.
 3. **Similarity Scoring**: We compute the **Cosine Similarity** between $v_{m}$ and all category vectors.
@@ -37,12 +39,12 @@ Instead of a lookup table, we define **Semantic Anchors** for each target catego
 
 ## 3. Model Comparison & Selection Rationale
 
-| Model | Size | CPU Perf | Semantic Depth | Why not chosen? |
-|---|---|---|---|---|
-| **FastText** | ~10MB | Extremely High | Low | Word-level only; fails on noisy merchant strings (e.g. codes/IDs). |
-| **DistilBERT** | ~250MB | Moderate | High | Higher latency; too heavy for a Tier 2 processing unit. |
-| **all-mpnet-base-v2** | ~420MB | Low | Very High | Excellence accuracy is overkill for short merchant strings; too slow on CPU. |
-| **all-MiniLM-L6-v2** | **80MB** | **High** | **High** | **Selected**: The "Sweet Spot" for real-time local intelligence. |
+| Model                 | Size     | CPU Perf       | Semantic Depth | Why not chosen?                                                              |
+| --------------------- | -------- | -------------- | -------------- | ---------------------------------------------------------------------------- |
+| **FastText**          | ~10MB    | Extremely High | Low            | Word-level only; fails on noisy merchant strings (e.g. codes/IDs).           |
+| **DistilBERT**        | ~250MB   | Moderate       | High           | Higher latency; too heavy for a Tier 2 processing unit.                      |
+| **all-mpnet-base-v2** | ~420MB   | Low            | Very High      | Excellence accuracy is overkill for short merchant strings; too slow on CPU. |
+| **all-MiniLM-L6-v2**  | **80MB** | **High**       | **High**       | **Selected**: The "Sweet Spot" for real-time local intelligence.             |
 
 ---
 

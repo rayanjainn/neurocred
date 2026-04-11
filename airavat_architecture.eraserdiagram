@@ -1,0 +1,90 @@
+title Airavat — Financial Digital Twin Engine
+
+direction right
+
+Data Generation [icon: package, color: teal] {
+  Generator [icon: activity, label: "SDV Copula + Faker\n5 personas, 100 profiles"]
+  Raw Parquets [icon: database, label: "Bank · UPI · SMS\nEMI · Open Banking"]
+}
+
+Ingestion [icon: box, color: orange] {
+  Canonical Event [icon: check-square, label: "Pydantic v2\nStatus normalisation"]
+  Redis Streams [icon: layers, label: "stream:bank\nstream:upi\nstream:sms\nstream:emi"]
+}
+
+Tier 2 — Classifier [icon: cpu, color: purple] {
+  Merchant Classifier [icon: zap, label: "Rule pre-filter\n+ MiniLM-L6-v2\n16 category anchors"]
+}
+
+Tier 3 — Feature Engine [icon: cpu, color: purple] {
+  Polars + EMA [icon: clock, label: "7d / 30d / 90d windows\nEMA half-life decay"]
+  Imputer + Anomaly [icon: alert-triangle, label: "KNN Imputer\nIsolation Forest"]
+  Feature Store [icon: archive, label: "28 features\ndata/features/user_id=*"]
+}
+
+Tier 4 — ML Scoring [icon: trending-up, color: green] {
+  XGBoost [icon: activity, label: "XGBoost hist classifier\nProxy labels → 0/1"]
+  Digital Twin [icon: user, label: "risk_score · liquidity_health\n32-dim Financial DNA\nCIBIL-like 300–900"]
+  Twin Store [icon: database, label: "Redis: twin:{uid}\nVersioned history\nPub/Sub emit"]
+}
+
+Tier 8 — Intervention Agent [icon: bell, color: orange] {
+  Trigger Engine [icon: alert-circle, label: "7 triggers\nLIQ · EMI · FRAUD · SPEND\nrelevance ≥ 0.75 to fire"]
+  Notifications [icon: send, label: "HIGH → SMS + Push\nMEDIUM → Push\nLOW → WhatsApp"]
+  Avatar Chat [icon: message-circle, label: "Intent detection\nContext-aware responses\nDaily / weekly reports"]
+  Audit Log [icon: shield, label: "Immutable Redis zset\nRBI event-sourced replay"]
+}
+
+API [icon: terminal, color: green] {
+  FastAPI [icon: terminal, label: "Tiers 1–3: /ingest · /features · /classify\nTier 4–8: /twin/{uid} · /twin/{uid}/chat\n/twin/{uid}/report · /audit/replay"]
+}
+
+Offline Pipeline [icon: play, color: gray] {
+  Phase 1 [icon: package, label: "Generate data"]
+  Phase 3 [icon: cpu, label: "Compute features"]
+  Phase 4 [icon: trending-up, label: "Train XGBoost"]
+  Phase 5 [icon: check-circle, label: "Run tests"]
+}
+
+// Data generation
+Generator --> Raw Parquets: SDV + Faker output
+
+// Ingestion
+Raw Parquets --> Canonical Event: normalise status + strip cols
+Canonical Event --> Redis Streams: XADD via redis_producer
+
+// Tier 2
+Redis Streams --> Merchant Classifier: XREADGROUP consume
+Merchant Classifier --> Feature Store: typed events → features
+
+// Tier 3
+Feature Store --> Polars + EMA: batch scan
+Polars + EMA --> Imputer + Anomaly: raw feature matrix
+Imputer + Anomaly --> Feature Store: 28 clean features
+
+// Tier 4 — train
+Feature Store --> XGBoost: proxy labels + sparse matrix
+XGBoost --> Digital Twin: trained model scores
+
+// Tier 4 — twin update
+Feature Store --> Digital Twin: bootstrap from Parquet
+Digital Twin --> Twin Store: save + version snapshot
+Twin Store --> Trigger Engine: twin_updated pub/sub
+
+// Tier 8 — agent loop
+Trigger Engine --> Notifications: relevance ≥ 0.75
+Trigger Engine --> Audit Log: log trigger_fired
+Notifications --> Audit Log: log notification_sent
+Avatar Chat --> Audit Log: log chat_message
+Digital Twin --> Avatar Chat: twin state context
+
+// API
+FastAPI --> Digital Twin: GET / POST /twin/{uid}
+FastAPI --> Avatar Chat: POST /twin/{uid}/chat
+FastAPI --> Audit Log: GET /twin/{uid}/audit
+
+// Offline pipeline
+Phase 1 --> Phase 3: sentinel-gated
+Phase 3 --> Phase 4: features ready
+Phase 4 --> Phase 5: model ready
+Phase 5 --> FastAPI: all tests green

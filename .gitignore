@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Data & Models (Large Files)
+data/raw/
+data/features/
+data/models/*.ubj
+data/models/*.json
+*.parquet
+*.csv
+
+# Logs & Environment
+*.log
+.env
+.flaskenv
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# Airavat Specifics
+/tmp/airavat-redis.log
+.pytest_cache/

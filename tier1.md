@@ -7,7 +7,9 @@ Related Tiers: Tier 1 (Signal Ingestion)
 Tier 1 is the ingestion foundation of FinTwin. It handles the challenges of **heterogeneous financial signals** by normalizing multi-format data into a canonical event stream. This layer is designed as an "Empty Pipeline" that can ingest both synthetic development data and real production feeds from licensed gateways.
 
 ### 1.1 Ingestion Sources
+
 The system consumes data from five primary domains:
+
 - **Bank Transactions**: CASA and term-deposit statements via CSV/PDF parsing or direct API.
 - **UPI Logs**: Real-time NPCI-compliant payloads (P2P, P2M, Autopay).
 - **SMS Transactional Alerts**: Parsed GSM-level alerts for immediate debit/credit notifications.
@@ -19,12 +21,16 @@ The system consumes data from five primary domains:
 ## 2. Structural Integrity & Compliance
 
 ### 2.1 Schema Normalization
+
 Every raw event is validated against a strict JSON schema (defined in `Schema.md`) to ensure idempotency and temporal consistency.
+
 - **Idempotency**: Every event is assigned a UUID to prevent duplicate processing.
 - **Temporal Anchoring**: All events are normalized to ISO 8601 timestamps to enable sliding-window calculations in Tier 2/3.
 
 ### 2.2 Privacy & DPDPA Compliance
+
 Tier 1 enforces PII (Personally Identifiable Information) masking at the gateway level.
+
 - **Anonymized Keys**: User IDs are hashed before entering the stream.
 - **Minimalist Payloads**: Only fields relevant to the Digital Twin (amounts, timestamps, merchants) are propagated downstream.
 

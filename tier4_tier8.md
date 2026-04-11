@@ -122,9 +122,11 @@ src/intervention/
 - End-of-day/weekly comprehensive report automatically sent via **WhatsApp** and **SMS**.
 
 ---
+
 ## 5. Target variables & real-world transition strategy
 
 ### 5.1 Key Metrics
+
 - **Twin Accuracy**: Back-tested evolution vs actual data
 - **Intervention Acceptance Rate**: 35–60%
 - **Chat Engagement**: Average messages per session with avatar
@@ -153,7 +155,8 @@ src/intervention/
 **Purpose**  
 Every incoming feature vector updates the Digital Twin in a deterministic, auditable lifecycle.
 
-**Update Flow**  
+**Update Flow**
+
 ```
 Feature Vector → Twin Update → Derived Metrics Calculation → Version Increment → Snapshot Storage → Event Emission
 ```
@@ -179,18 +182,21 @@ This lifecycle ensures the twin remains the **Single Source of Truth**.
 **Purpose**  
 Create an RBI-grade immutable audit trail.
 
-**Versioning Mechanism**  
-- Current state stored under key: `twin:{gstin}`  
+**Versioning Mechanism**
+
+- Current state stored under key: `twin:{gstin}`
 - History stored as Redis List: `twin:{gstin}:history` (LPUSH)
 
-Each snapshot contains:  
-- `version` (monotonic integer)  
-- `timestamp`  
+Each snapshot contains:
+
+- `version` (monotonic integer)
+- `timestamp`
 - Full twin state at that moment
 
-**Supported Operations**  
-- Get current twin  
-- Get full history  
+**Supported Operations**
+
+- Get current twin
+- Get full history
 - Reconstruct twin state at any historical timestamp
 
 This enables full auditability and regulatory compliance.
@@ -201,16 +207,18 @@ This enables full auditability and regulatory compliance.
 **Purpose**  
 Provide a deterministic 32-dimensional behavioral embedding.
 
-**Construction Steps**  
-1. Normalize selected features from the 46-feature vector to [0, 1].  
-2. Apply weighted projection: `dna[i] = normalized_feature_k × weight_i`.  
-3. Add engineered interaction terms (e.g., volatility × credit_dependency, income_stability × cash_buffer).  
+**Construction Steps**
+
+1. Normalize selected features from the 46-feature vector to [0, 1].
+2. Apply weighted projection: `dna[i] = normalized_feature_k × weight_i`.
+3. Add engineered interaction terms (e.g., volatility × credit_dependency, income_stability × cash_buffer).
 4. Clamp all values to [0, 1].
 
-**Uses**  
-- Similarity comparison between users  
-- Anomaly detection  
-- Behavioral clustering for persona refinement  
+**Uses**
+
+- Similarity comparison between users
+- Anomaly detection
+- Behavioral clustering for persona refinement
 - Input features for downstream scoring
 
 The process is fully deterministic (seeded) for reproducibility.
@@ -226,7 +234,8 @@ Every twin update emits a `twin_updated` event via Redis Pub/Sub.
 
 **Payload** includes: `gstin`, current twin state summary, and changed metrics.
 
-**Flow**  
+**Flow**
+
 ```
 Twin Updated → Event Published → Intervention Agent Subscribes → Trigger Evaluation
 ```
@@ -239,12 +248,13 @@ This architecture ensures real-time reactivity without polling.
 **Purpose**  
 Show the agent as a true autonomous loop.
 
-**Agent Execution Cycle**  
-1. Listen to `twin_updated` events (Redis Pub/Sub).  
-2. Evaluate all defined triggers.  
-3. Compute relevance score for each potential intervention.  
-4. Select and prioritize actions.  
-5. Execute chosen action (alert, suggestion, loan offer, negotiation start).  
+**Agent Execution Cycle**
+
+1. Listen to `twin_updated` events (Redis Pub/Sub).
+2. Evaluate all defined triggers.
+3. Compute relevance score for each potential intervention.
+4. Select and prioritize actions.
+5. Execute chosen action (alert, suggestion, loan offer, negotiation start).
 6. Log the full interaction immutably.
 
 **Loop Structure**: Listen → Evaluate → Decide → Act → Log
@@ -256,13 +266,14 @@ Show the agent as a true autonomous loop.
 Explain how actions are intelligently chosen.
 
 **Decision Process**  
-For every trigger:  
-1. Compute relevance score.  
-2. Map trigger to possible actions (alert, suggestion, micro-loan offer, EMI restructuring dialogue).  
-3. Select best action based on:  
-   - Urgency  
-   - User persona  
-   - Historical acceptance rate  
+For every trigger:
+
+1. Compute relevance score.
+2. Map trigger to possible actions (alert, suggestion, micro-loan offer, EMI restructuring dialogue).
+3. Select best action based on:
+   - Urgency
+   - User persona
+   - Historical acceptance rate
    - Regulatory constraints (consent status)
 
 **Example**  
@@ -278,28 +289,32 @@ Ensure realistic and compliant multi-channel delivery.
 
 **Priority-Based Channel Strategy**
 
-| Priority | Trigger Type                  | Delivery Channels      |
-|----------|-------------------------------|------------------------|
-| High     | Liquidity drop to LOW, high EMI risk | SMS + Push            |
-| Medium   | Overspend warning, lifestyle inflation      | Push Notification     |
-| Low      | Savings opportunity, daily summary  | WhatsApp              |
+| Priority | Trigger Type                           | Delivery Channels |
+| -------- | -------------------------------------- | ----------------- |
+| High     | Liquidity drop to LOW, high EMI risk   | SMS + Push        |
+| Medium   | Overspend warning, lifestyle inflation | Push Notification |
+| Low      | Savings opportunity, daily summary     | WhatsApp          |
 
-Logic:  
-- If `liquidity_health == "LOW"`: Send SMS + Push immediately.  
+Logic:
+
+- If `liquidity_health == "LOW"`: Send SMS + Push immediately.
 - Daily/weekly summaries: Delivered via WhatsApp.
 
 ---
+
 ## 14. Report Generation System
 
 **Purpose**  
 Generate insightful periodic summaries.
 
-**Report Generation Flow**  
-1. Aggregate: current twin state + recent changes + triggered alerts.  
-2. Generate plain-language summary: risk status, key insights, actionable suggestions.  
+**Report Generation Flow**
+
+1. Aggregate: current twin state + recent changes + triggered alerts.
+2. Generate plain-language summary: risk status, key insights, actionable suggestions.
 3. Deliver via consented channels (primarily WhatsApp + fallback SMS).
 
 ---
+
 ## 15. Avatar Chat Intelligence Flow
 
 **Purpose**  
@@ -308,10 +323,11 @@ Power natural conversation with the Digital Twin.
 **Chat Flow**  
 User Query → Fetch latest Twin State + Recent History → Build rich context → LLM generates response → Return to frontend.
 
-**Context Includes**  
-- Current twin metrics and avatar state  
-- Recent alerts and interventions  
-- Historical trends  
+**Context Includes**
+
+- Current twin metrics and avatar state
+- Recent alerts and interventions
+- Historical trends
 
 The avatar dynamically updates its expression based on twin health.
 
@@ -322,22 +338,26 @@ The avatar dynamically updates its expression based on twin health.
 Make the system self-improving.
 
 **Feedback Mechanism**  
-The system tracks user responses to interventions:  
-- Did the user view/engage with the suggestion?  
-- Did they accept/reject a proposal?  
+The system tracks user responses to interventions:
+
+- Did the user view/engage with the suggestion?
+- Did they accept/reject a proposal?
 - Did risk metrics improve after following the advice?
 
-This feedback updates:  
-- Relevance scoring weights  
-- Intervention strategy per persona  
-- Historical acceptance rate  
+This feedback updates:
+
+- Relevance scoring weights
+- Intervention strategy per persona
+- Historical acceptance rate
 
 The loop continuously refines personalization and effectiveness.
 
 ---
+
 ## 17. Mock API-JSON schemas & data flows
 
 ### 17.1 Digital Twin Current State (GET /twin/{gstin})
+
 ```json
 {
   "user_id": "29ABCDE1234F1Z5",
@@ -405,7 +425,7 @@ The loop continuously refines personalization and effectiveness.
 This spec is fully **Copilot-ready**. The Digital Twin serves as the **Single Source of Truth**, while the Proactive Intervention Agent with Avatar makes the twin visible, conversational, and actionable for the user — always with full regulatory compliance.
 
 ```
-# Digital Twin + Proactive Intervention Agent with Avatar = 
+# Digital Twin + Proactive Intervention Agent with Avatar =
 # The Living, Visible, and Caring Brain of the Financial System
 # Users can see it, talk to it, receive timely alerts, and get insightful reports — always with consent.
 ```
