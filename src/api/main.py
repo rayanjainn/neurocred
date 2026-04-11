@@ -40,16 +40,22 @@ Tier 6 — Predictive Risk Simulation Engine endpoints:
 from __future__ import annotations
 
 import json
+import os
+import re
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
+from urllib.parse import urlencode
+from xml.sax.saxutils import escape
 
+import httpx
 import redis.asyncio as aioredis
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from config.settings import settings
 from src.features.schemas import BehaviouralFeatureVector
+from src.strategy.strategy_routes import router as strategy_router
 
 
 @asynccontextmanager
@@ -81,6 +87,88 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(strategy_router)
+
+CALL_SYSTEM_PROMPT = (
+    "You are Vyapar Saathi, a smart business assistant for small vendors. "
+    "Keep answers short, conversational, practical, and voice-friendly."
+)
+
+
+def _normalize_public_base(raw: str | None) -> str | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    if value.startswith("http://") or value.startswith("https://"):
+        return value.rstrip("/")
+    return f"https://{value.rstrip('/')}"
+
+
+def _resolve_webhook_base_url(request: Request) -> str | None:
+    configured = _normalize_public_base(
+        os.getenv("VOICE_PUBLIC_BASE_URL") or os.getenv("DOMAIN")
+    )
+    if configured:
+        return configured
+
+    host = request.headers.get("host")
+    if not host:
+        return None
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme or "https")
+    return f"{proto}://{host}"
+
+
+async def _is_reachable(base_url: str) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{base_url}/health")
+        return response.status_code < 500
+    except Exception:
+        return False
+
+
+def _safe_speech(text: str) -> str:
+    return escape(" ".join(text.replace("\n", " ").split())[:900])
+
+
+async def _groq_voice_reply(user_text: str) -> str:
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key:
+        return (
+            "I heard you. I can help with earnings, expenses, stock, and next best actions. "
+            "Please ask again after Groq API key is configured."
+        )
+
+    payload = {
+        "model": os.getenv("GROQ_CALL_MODEL", "llama-3.1-8b-instant"),
+        "temperature": 0.3,
+        "messages": [
+            {"role": "system", "content": CALL_SYSTEM_PROMPT},
+            {"role": "user", "content": user_text},
+        ],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        response.raise_for_status()
+        data = response.json()
+        content = (
+            data.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        return content or "I am here. Please ask me about your business performance."
+    except Exception:
+        return "I am unable to fetch a smart reply right now. Please try again in a moment."
+
 
 # ── health ────────────────────────────────────────────────────────────────────
 
@@ -93,6 +181,152 @@ async def health() -> dict[str, str]:
     except Exception:
         redis_status = "down"
     return {"status": "ok", "redis": redis_status}
+
+
+# ── Voice call assistant (Twilio) ───────────────────────────────────────────
+
+@app.post("/voice/call/start")
+async def start_voice_call(body: dict[str, Any], request: Request) -> dict[str, Any]:
+    to_number = str(body.get("to", "")).strip()
+    user_id = str(body.get("userId", "")).strip()
+    if not re.fullmatch(r"\+[1-9]\d{7,14}", to_number):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide a valid phone number in E.164 format, e.g. +919876543210",
+        )
+
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+    from_number = os.getenv("TWILIO_PHONE_NUMBER", "").strip()
+    if not account_sid or not auth_token or not from_number:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Missing Twilio config. Set TWILIO_ACCOUNT_SID, "
+                "TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER."
+            ),
+        )
+
+    base_url = _resolve_webhook_base_url(request)
+    if not base_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing VOICE_PUBLIC_BASE_URL or DOMAIN for Twilio webhooks.",
+        )
+
+    reachable = await _is_reachable(base_url)
+    if not reachable:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Public webhook URL is not reachable: {base_url}. "
+                "Start or refresh your tunnel and update VOICE_PUBLIC_BASE_URL."
+            ),
+        )
+
+    query = urlencode({"userId": user_id}) if user_id else ""
+    webhook = f"{base_url}/voice/call/incoming"
+    if query:
+        webhook = f"{webhook}?{query}"
+
+    twilio_url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
+    payload = {
+        "To": to_number,
+        "From": from_number,
+        "Url": webhook,
+        "Method": "POST",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                twilio_url,
+                data=payload,
+                auth=(account_sid, auth_token),
+            )
+        if response.status_code >= 400:
+            detail = response.text[:500]
+            raise HTTPException(
+                status_code=502,
+                detail=f"Twilio call creation failed: {detail}",
+            )
+
+        call_data = response.json()
+        return {
+            "ok": True,
+            "callSid": call_data.get("sid"),
+            "status": call_data.get("status"),
+            "to": call_data.get("to"),
+            "from": call_data.get("from"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to initiate call: {exc}") from exc
+
+
+@app.api_route("/voice/call/incoming", methods=["GET", "POST"])
+async def voice_call_incoming(request: Request) -> Response:
+    base_url = _resolve_webhook_base_url(request) or ""
+    user_id = str(request.query_params.get("userId", "")).strip()
+    query = urlencode({"userId": user_id}) if user_id else ""
+    respond_url = f"{base_url}/voice/call/respond"
+    if query:
+        respond_url = f"{respond_url}?{query}"
+
+    xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Say voice=\"alice\">Welcome to Vyapar Saathi assistant.</Say>
+  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(respond_url)}\">
+    <Say voice=\"alice\">You can ask me about earnings, expenses, profit, stock, or what to do next.</Say>
+  </Gather>
+  <Say voice=\"alice\">I did not catch that.</Say>
+  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
+</Response>"""
+    return Response(content=xml, media_type="text/xml")
+
+
+@app.api_route("/voice/call/respond", methods=["GET", "POST"])
+async def voice_call_respond(request: Request) -> Response:
+    base_url = _resolve_webhook_base_url(request) or ""
+    user_id = str(request.query_params.get("userId", "")).strip()
+    query = urlencode({"userId": user_id}) if user_id else ""
+    next_url = f"{base_url}/voice/call/respond"
+    if query:
+        next_url = f"{next_url}?{query}"
+
+    form = await request.form()
+    speech_text = str(form.get("SpeechResult", "")).strip()
+
+    if not speech_text:
+        xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(next_url)}\">
+    <Say voice=\"alice\">I could not hear you clearly. Please say that again.</Say>
+  </Gather>
+  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
+</Response>"""
+        return Response(content=xml, media_type="text/xml")
+
+    if re.search(r"\b(bye|goodbye|end call|stop|hang up|thank you)\b", speech_text, re.I):
+        xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Say voice=\"alice\">Thank you. Ending the call now. Have a productive day.</Say>
+  <Hangup/>
+</Response>"""
+        return Response(content=xml, media_type="text/xml")
+
+    reply = await _groq_voice_reply(speech_text)
+    safe_reply = _safe_speech(reply)
+    xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+  <Say voice=\"alice\">{safe_reply}</Say>
+  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(next_url)}\">
+    <Say voice=\"alice\">You can continue speaking, or say bye to end the call.</Say>
+  </Gather>
+  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
+</Response>"""
+    return Response(content=xml, media_type="text/xml")
 
 
 # ── Tier 1: ingestion trigger ─────────────────────────────────────────────────
