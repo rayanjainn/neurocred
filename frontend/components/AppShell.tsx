@@ -36,6 +36,7 @@ import {
   Sun,
   Compass,
 } from "lucide-react";
+import { VoiceControlButton } from "@/src/components/navbar/VoiceControlButton";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -357,6 +358,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
 
               <div className="flex items-center gap-2">
+              <VoiceControlButton />
               <Button
                 type="button"
                 variant="ghost"

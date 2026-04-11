@@ -667,6 +667,588 @@ async def credit_health() -> dict[str, Any]:
     }
 
 
+
+# ── Tier 5: Reasoning Agent endpoints ────────────────────────────────────────
+
+@app.post("/reasoning/{user_id}/run")
+async def run_reasoning(user_id: str, body: dict[str, Any] = {}) -> dict[str, Any]:
+    """
+    Trigger a full Tier 5 reasoning run for a user.
+
+    Fetches the latest feature vector from Redis, runs the 3-layer
+    Contradiction Detector, assembles context, fires the 6-step CoT
+    LLM call, and persists all outputs back to the twin + Redis stream.
+
+    Optional body fields:
+      declared_income   — monthly income from onboarding (INR)
+      recent_events     — list of last typed events (Tier 2 format)
+      simulation_verdict — Tier 6 EWS output (if available)
+      is_first_run      — bool, default false
+    """
+    from datetime import datetime
+    from pathlib import Path
+    import polars as pl
+    from src.features.schemas import BehaviouralFeatureVector as BFV
+    from src.reasoning.tier5 import run_tier5
+
+    redis: aioredis.Redis = app.state.redis
+
+    # Load features from Redis cache or parquet
+    raw = await redis.get(f"twin:features:{user_id}")
+    if raw:
+        feat_data = json.loads(raw)
+    else:
+        cache = Path(settings.features_path) / f"user_id={user_id}" / "features.parquet"
+        if not cache.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"No feature vector found for user_id={user_id}. Run phases 1-3 first.",
+            )
+        df = pl.read_parquet(cache)
+        if df.height == 0:
+            raise HTTPException(status_code=404, detail="Feature parquet is empty")
+        feat_data = df.row(0, named=True)
+        feat_data["user_id"] = user_id
+        feat_data.setdefault("computed_at", datetime.utcnow().isoformat())
+
+    # Coerce types for BFV
+    bool_fields = {"salary_day_spike_flag", "anomaly_flag"}
+    int_fields = {"subscription_count_30d", "emi_payment_count_90d",
+                  "merchant_category_shift_count", "months_active_gst"}
+    for f in bool_fields:
+        if f in feat_data:
+            feat_data[f] = feat_data[f] in ("1", "True", "true", True, 1)
+    for f in int_fields:
+        if f in feat_data and feat_data[f] is not None:
+            try:
+                feat_data[f] = int(float(feat_data[f]))
+            except (ValueError, TypeError):
+                feat_data[f] = 0
+    for k, v in feat_data.items():
+        if isinstance(v, str) and v == "":
+            feat_data[k] = None
+
+    try:
+        fv = BFV(**{k: v for k, v in feat_data.items() if k in BFV.model_fields})
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Feature parse error: {exc}")
+
+    # Run Tier 5 pipeline
+    result = await run_tier5(
+        features=fv,
+        redis_client=redis,
+        declared_income=float(body.get("declared_income", 0.0)),
+        previous_features=body.get("previous_features"),
+        recent_events=body.get("recent_events"),
+        simulation_verdict=body.get("simulation_verdict"),
+        is_first_run=bool(body.get("is_first_run", False)),
+    )
+
+    # Write Tier 5 outputs back to the digital twin
+    twin_raw = await redis.get(f"twin:{user_id}")
+    if twin_raw:
+        twin_data = json.loads(twin_raw)
+        twin_data["last_narrative"] = result.risk_narrative
+        twin_data["active_flags"] = [f.model_dump() for f in result.concern_flags]
+        twin_data["intent_signals"] = [s.model_dump() for s in result.intent_signals]
+        twin_data["last_cot_trace"] = result.cot_trace.model_dump()
+        twin_data["last_reasoning_run_id"] = result.run_id
+        twin_data["last_reasoning_at"] = result.computed_at.isoformat()
+        await redis.set(f"twin:{user_id}", json.dumps(twin_data, default=str))
+
+    return {
+        "user_id": user_id,
+        "run_id": result.run_id,
+        "situation": result.cot_trace.classify.value,
+        "confidence": result.cot_trace.confidence,
+        "risk_narrative": result.risk_narrative,
+        "concern_flags_count": len(result.concern_flags),
+        "intent_signals_count": len(result.intent_signals),
+        "contradiction_detected": result.contradiction.contradiction_detected,
+        "contradiction_severity": result.contradiction.severity.value,
+        "interrogation_needed": result.interrogation_needed,
+        "interrogation_session_id": result.interrogation_session_id,
+        "fallback_used": result.fallback_used,
+        "computed_at": result.computed_at.isoformat(),
+    }
+
+
+@app.get("/reasoning/{user_id}/result")
+async def get_reasoning_result(user_id: str) -> dict[str, Any]:
+    """
+    Get the latest Tier 5 reasoning result for a user (cached 24h in Redis).
+
+    Returns the full Tier5Result including CoT trace, concern flags,
+    intent signals, contradiction detector output, and risk narrative.
+    """
+    from src.reasoning.tier5 import get_tier5_result
+
+    redis: aioredis.Redis = app.state.redis
+    result = await get_tier5_result(user_id, redis)
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No reasoning result for user_id={user_id}. "
+                   "Call POST /reasoning/{user_id}/run first.",
+        )
+    return result.model_dump()
+
+
+@app.get("/reasoning/{user_id}/narrative")
+async def get_narrative(user_id: str) -> dict[str, Any]:
+    """
+    Lightweight endpoint — returns only the risk narrative and concern flags.
+    Used by the frontend dashboard card without pulling the full CoT trace.
+    """
+    from src.reasoning.tier5 import get_tier5_result
+
+    redis: aioredis.Redis = app.state.redis
+    result = await get_tier5_result(user_id, redis)
+    if not result:
+        # Fall back to twin's cached narrative
+        twin_raw = await redis.get(f"twin:{user_id}")
+        if twin_raw:
+            twin_data = json.loads(twin_raw)
+            return {
+                "user_id": user_id,
+                "risk_narrative": twin_data.get("last_narrative", ""),
+                "active_flags": twin_data.get("active_flags", []),
+                "intent_signals": twin_data.get("intent_signals", []),
+                "source": "twin_cache",
+            }
+        raise HTTPException(status_code=404, detail=f"No narrative for user_id={user_id}")
+
+    return {
+        "user_id": user_id,
+        "risk_narrative": result.risk_narrative,
+        "situation": result.cot_trace.classify.value,
+        "confidence": result.cot_trace.confidence,
+        "active_flags": [f.model_dump() for f in result.concern_flags],
+        "intent_signals": [s.model_dump() for s in result.intent_signals],
+        "contradiction": result.contradiction.model_dump(),
+        "computed_at": result.computed_at.isoformat(),
+        "source": "tier5_cache",
+    }
+
+
+@app.get("/reasoning/{user_id}/cot")
+async def get_cot_trace(user_id: str) -> dict[str, Any]:
+    """
+    Return the full 6-step Chain-of-Thought trace for regulatory audit.
+    This is the machine-readable justification for credit decisions.
+
+    Only accessible by analyst roles — links to Tier 10 audit trail.
+    """
+    from src.reasoning.tier5 import get_tier5_result
+
+    redis: aioredis.Redis = app.state.redis
+    result = await get_tier5_result(user_id, redis)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"No CoT trace for user_id={user_id}")
+
+    return {
+        "user_id": user_id,
+        "run_id": result.run_id,
+        "cot_trace": result.cot_trace.model_dump(),
+        "contradiction": result.contradiction.model_dump(),
+        "delta_packet": result.delta_packet.model_dump() if result.delta_packet else None,
+        "computed_at": result.computed_at.isoformat(),
+    }
+
+
+# ── Tier 5: Interrogation endpoints ──────────────────────────────────────────
+
+@app.get("/reasoning/interrogation/{session_id}")
+async def get_interrogation_session(session_id: str) -> dict[str, Any]:
+    """
+    Get the current state of an interrogation session.
+
+    Returns state, questions list, answers received so far,
+    and the next pending question text.
+    """
+    from src.reasoning.schemas import InterrogationSession
+
+    redis: aioredis.Redis = app.state.redis
+    raw = await redis.get(f"tier5:interrogation:{session_id}")
+    if not raw:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Interrogation session {session_id} not found or expired (24h TTL).",
+        )
+    session = InterrogationSession.model_validate_json(raw)
+
+    next_q = None
+    if session.current_q_index < len(session.questions):
+        next_q = session.questions[session.current_q_index].question_text
+
+    return {
+        "session_id": session_id,
+        "user_id": session.user_id,
+        "state": session.state.value,
+        "trigger_reason": session.trigger_reason,
+        "total_questions": len(session.questions),
+        "current_question_index": session.current_q_index,
+        "next_question": next_q,
+        "answers_count": len(session.answers),
+        "completed": session.state.value in ("COMPLETE", "ABANDONED"),
+        "interrogation_value_score": session.interrogation_value_score,
+    }
+
+
+@app.post("/reasoning/interrogation/{session_id}/answer")
+async def submit_interrogation_answer(
+    session_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Submit an answer to the current interrogation question.
+
+    Request body: {"answer": "Yes, I have a freelance income of about ₹25,000/month"}
+
+    The state machine advances, parses the answer, and applies twin patches.
+    Returns the next question (or completion status).
+
+    On completion, triggers twin re-update with all patches applied.
+    """
+    from src.reasoning.schemas import InterrogationSession
+    from src.reasoning.interrogation import advance_session
+    from src.features.schemas import BehaviouralFeatureVector as BFV
+    from datetime import datetime
+
+    redis: aioredis.Redis = app.state.redis
+    answer_text: str = body.get("answer", "")
+
+    raw = await redis.get(f"tier5:interrogation:{session_id}")
+    if not raw:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    session = InterrogationSession.model_validate_json(raw)
+    if session.state.value in ("COMPLETE", "ABANDONED"):
+        return {"session_id": session_id, "state": session.state.value,
+                "message": "Session is already complete."}
+
+    # Load features for context in answer parsing
+    feat_raw = await redis.get(f"twin:features:{session.user_id}")
+    fv = None
+    if feat_raw:
+        try:
+            feat_data = json.loads(feat_raw)
+            bool_fields = {"salary_day_spike_flag", "anomaly_flag"}
+            int_fields = {"subscription_count_30d", "emi_payment_count_90d",
+                          "merchant_category_shift_count", "months_active_gst"}
+            for f in bool_fields:
+                if f in feat_data:
+                    feat_data[f] = feat_data[f] in ("1", "True", "true", True, 1)
+            for f in int_fields:
+                if f in feat_data and feat_data[f] is not None:
+                    try:
+                        feat_data[f] = int(float(feat_data[f]))
+                    except (ValueError, TypeError):
+                        feat_data[f] = 0
+            fv = BFV(**{k: v for k, v in feat_data.items() if k in BFV.model_fields})
+        except Exception:
+            pass
+
+    if fv is None:
+        raise HTTPException(status_code=503, detail=f"Feature vector unavailable for {session.user_id}")
+
+    # Advance state machine
+    updated_session, next_question, twin_patch = advance_session(
+        session=session,
+        user_answer=answer_text if answer_text else None,
+        features=fv,
+    )
+
+    # Persist updated session
+    await redis.setex(
+        f"tier5:interrogation:{session_id}",
+        86400,
+        updated_session.model_dump_json(),
+    )
+
+    # Apply twin patches if any
+    if twin_patch:
+        twin_raw = await redis.get(f"twin:{session.user_id}")
+        if twin_raw:
+            twin_data = json.loads(twin_raw)
+            twin_data.update(twin_patch)
+            await redis.set(f"twin:{session.user_id}", json.dumps(twin_data, default=str))
+
+    # Emit completion event
+    if updated_session.state.value == "COMPLETE":
+        await redis.xadd(
+            "stream:reasoning_events",
+            {
+                "event": "interrogation_completed",
+                "user_id": session.user_id,
+                "session_id": session_id,
+                "value_score": str(updated_session.interrogation_value_score),
+                "patches_applied": json.dumps(twin_patch, default=str),
+            },
+        )
+
+    return {
+        "session_id": session_id,
+        "state": updated_session.state.value,
+        "current_question_index": updated_session.current_q_index,
+        "next_question": next_question,
+        "twin_patch_applied": twin_patch,
+        "complete": updated_session.state.value in ("COMPLETE", "ABANDONED"),
+        "interrogation_value_score": updated_session.interrogation_value_score,
+    }
+
+
+@app.delete("/reasoning/interrogation/{session_id}/abandon")
+async def abandon_interrogation(session_id: str) -> dict[str, Any]:
+    """
+    Mark an interrogation session as abandoned.
+
+    Unanswered questions become UNRESOLVED_AMBIGUITY concern flags
+    persisted to the twin's active_flags.
+    """
+    from src.reasoning.schemas import InterrogationSession, InterrogationState
+    from src.reasoning.interrogation import unanswered_to_flags
+
+    redis: aioredis.Redis = app.state.redis
+    raw = await redis.get(f"tier5:interrogation:{session_id}")
+    if not raw:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    session = InterrogationSession.model_validate_json(raw)
+    session.state = InterrogationState.ABANDONED
+
+    # Persist flags for unanswered questions
+    flags = unanswered_to_flags(session)
+    if flags:
+        twin_raw = await redis.get(f"twin:{session.user_id}")
+        if twin_raw:
+            twin_data = json.loads(twin_raw)
+            existing = twin_data.get("active_flags", [])
+            new_flags = [f.model_dump() for f in flags]
+            twin_data["active_flags"] = (existing + new_flags)[:10]
+            await redis.set(f"twin:{session.user_id}", json.dumps(twin_data, default=str))
+
+    await redis.setex(f"tier5:interrogation:{session_id}", 3600, session.model_dump_json())
+
+    return {
+        "session_id": session_id,
+        "state": "ABANDONED",
+        "unresolved_flags_created": len(flags),
+    }
+
+
+
+
+# ── Tier 9: Vigilance (Anomaly & Deception Detection) endpoints ───────────────
+
+@app.post("/vigilance/{user_id}/run")
+async def run_vigilance(user_id: str, body: dict[str, Any] = {}) -> dict[str, Any]:
+    """
+    Trigger a full Tier 9 vigilance run for a user.
+
+    Runs all 5 sub-modules in sequence:
+      - Fraud Ring & Cycle Detection (NetworkX)
+      - Social Engineering Defence (Bayesian SMS/voice analysis)
+      - Synthetic Identity & Bot Detector
+      - Hidden Financial Stress (logistic regression)
+      - Income Underreporting + Identity Shift detection
+
+    Optional body fields:
+      upi_events        — list of UPI transaction dicts
+      ewb_events        — list of E-Way Bill dicts
+      sms_texts         — list of {"text": "...", "sender_id": "..."} dicts
+      declared_income   — monthly INR from onboarding
+      cohort_mean_income / cohort_std_income — peer cohort stats
+      category_mix_30d / category_mix_90d    — spend fractions per category
+    """
+    from pathlib import Path
+    import polars as pl
+    from datetime import datetime
+    from src.features.schemas import BehaviouralFeatureVector as BFV
+    from src.vigilance.tier9 import run_tier9
+
+    redis: aioredis.Redis = app.state.redis
+
+    # Load features
+    raw = await redis.get(f"twin:features:{user_id}")
+    if raw:
+        feat_data = json.loads(raw)
+    else:
+        cache = Path(settings.features_path) / f"user_id={user_id}" / "features.parquet"
+        if not cache.exists():
+            raise HTTPException(status_code=404,
+                detail=f"No feature vector for user_id={user_id}.")
+        df = pl.read_parquet(cache)
+        if df.height == 0:
+            raise HTTPException(status_code=404, detail="Feature parquet is empty")
+        feat_data = df.row(0, named=True)
+        feat_data["user_id"] = user_id
+        feat_data.setdefault("computed_at", datetime.utcnow().isoformat())
+
+    # Type coercion
+    bool_fields = {"salary_day_spike_flag", "anomaly_flag"}
+    int_fields  = {"subscription_count_30d", "emi_payment_count_90d",
+                   "merchant_category_shift_count", "months_active_gst"}
+    for f in bool_fields:
+        if f in feat_data:
+            feat_data[f] = feat_data[f] in ("1", "True", "true", True, 1)
+    for f in int_fields:
+        if f in feat_data and feat_data[f] is not None:
+            try:
+                feat_data[f] = int(float(feat_data[f]))
+            except (ValueError, TypeError):
+                feat_data[f] = 0
+    for k, v in feat_data.items():
+        if isinstance(v, str) and v == "":
+            feat_data[k] = None
+
+    try:
+        fv = BFV(**{k: v for k, v in feat_data.items() if k in BFV.model_fields})
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Feature parse error: {exc}")
+
+    result = await run_tier9(
+        features=fv,
+        redis_client=redis,
+        upi_events=body.get("upi_events"),
+        ewb_events=body.get("ewb_events"),
+        sms_texts=body.get("sms_texts"),
+        declared_income=float(body.get("declared_income", 0.0)),
+        cohort_mean_income=float(body.get("cohort_mean_income", 0.0)),
+        cohort_std_income=float(body.get("cohort_std_income", 0.0)),
+        category_mix_30d=body.get("category_mix_30d"),
+        category_mix_90d=body.get("category_mix_90d"),
+    )
+
+    # Propagate key signals into the twin
+    twin_raw = await redis.get(f"twin:{user_id}")
+    if twin_raw:
+        twin_data = json.loads(twin_raw)
+        twin_data["fraud_ring_flag"]  = result.fraud_ring_flag
+        twin_data["deception_score"]  = result.deception_score
+        twin_data["vigilance_risk"]   = result.overall_risk_level.value
+        await redis.set(f"twin:{user_id}", json.dumps(twin_data, default=str))
+
+    return {
+        "user_id":          user_id,
+        "run_id":           result.run_id,
+        "deception_score":  result.deception_score,
+        "overall_risk":     result.overall_risk_level.value,
+        "fraud_ring_flag":  result.fraud_ring_flag,
+        "fraud_confidence": result.fraud_confidence,
+        "scam_probability": result.scam_probability,
+        "pagerank_score":   result.pagerank_score,
+        "bot_flag":         result.bot_detector.is_bot_flag,
+        "mule_flag":        result.bot_detector.is_mule_flag,
+        "stress_score":     result.stress_signal.stress_confidence_score,
+        "underreport_score": result.income_underreport.income_underreport_score,
+        "identity_shift_score": result.identity_shift.identity_shift_score,
+        "computed_at":      result.computed_at.isoformat(),
+    }
+
+
+@app.get("/vigilance/{user_id}/result")
+async def get_vigilance_result(user_id: str) -> dict[str, Any]:
+    """
+    Get the latest Tier 9 vigilance result for a user (cached 24h in Redis).
+    Returns the full Tier9Result including all module outputs.
+    """
+    from src.vigilance.tier9 import get_tier9_result
+
+    redis: aioredis.Redis = app.state.redis
+    result = await get_tier9_result(user_id, redis)
+    if not result:
+        raise HTTPException(status_code=404,
+            detail=f"No vigilance result for user_id={user_id}. "
+                   "Call POST /vigilance/{user_id}/run first.")
+    return result.model_dump()
+
+
+@app.get("/vigilance/{user_id}/summary")
+async def get_vigilance_summary(user_id: str) -> dict[str, Any]:
+    """
+    Lightweight vigilance summary for frontend dashboard cards.
+    Returns decision outputs and risk flags without full module details.
+    """
+    from src.vigilance.tier9 import get_tier9_result
+
+    redis: aioredis.Redis = app.state.redis
+    result = await get_tier9_result(user_id, redis)
+    if not result:
+        # Fall back to twin cache
+        twin_raw = await redis.get(f"twin:{user_id}")
+        if twin_raw:
+            twin_data = json.loads(twin_raw)
+            return {
+                "user_id": user_id,
+                "fraud_ring_flag": twin_data.get("fraud_ring_flag", False),
+                "deception_score": twin_data.get("deception_score", 0.0),
+                "overall_risk":    twin_data.get("vigilance_risk", "LOW"),
+                "source": "twin_cache",
+            }
+        raise HTTPException(status_code=404,
+            detail=f"No vigilance data for user_id={user_id}")
+
+    return {
+        "user_id":              user_id,
+        "deception_score":      result.deception_score,
+        "overall_risk":         result.overall_risk_level.value,
+        "fraud_ring_flag":      result.fraud_ring_flag,
+        "fraud_confidence":     result.fraud_confidence,
+        "scam_probability":     result.scam_probability,
+        "pagerank_score":       result.pagerank_score,
+        "is_shell_hub":         result.fraud_ring.is_shell_hub,
+        "bot_flag":             result.bot_detector.is_bot_flag,
+        "mule_flag":            result.bot_detector.is_mule_flag,
+        "stress_score":         result.stress_signal.stress_confidence_score,
+        "stress_trend":         result.stress_signal.cash_buffer_trend,
+        "underreport_score":    result.income_underreport.income_underreport_score,
+        "identity_shift_score": result.identity_shift.identity_shift_score,
+        "js_divergence":        result.identity_shift.js_divergence,
+        "computed_at":          result.computed_at.isoformat(),
+        "source":               "tier9_cache",
+    }
+
+
+@app.post("/vigilance/scam/analyze")
+async def analyze_scam(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Analyze a single SMS or voice transcript for social engineering signals.
+    Does NOT require a pre-computed feature vector.
+
+    Request body:
+      {"user_id": "u_0001", "text": "Your account will be blocked...", "sender_id": "TM-HDFCBK"}
+    """
+    from src.vigilance.scam_detector import run_scam_detector
+
+    user_id   = body.get("user_id", "anonymous")
+    text      = body.get("text", "")
+    sender_id = body.get("sender_id")
+
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    result = run_scam_detector(user_id=user_id, text=text, sender_id=sender_id)
+    return result.model_dump()
+
+
+@app.get("/vigilance/stream/status")
+async def vigilance_stream_status() -> dict[str, Any]:
+    """
+    Returns the current depth of the vigilance event stream and recent alert counts.
+    """
+    redis: aioredis.Redis = app.state.redis
+    try:
+        stream_len = await redis.xlen("stream:vigilance_events")
+    except Exception:
+        stream_len = -1
+
+    return {
+        "stream":       "stream:vigilance_events",
+        "stream_length": stream_len,
+        "status":       "ok",
+    }
+
+
 if __name__ == "__main__":
     uvicorn.run(
         "src.api.main:app",

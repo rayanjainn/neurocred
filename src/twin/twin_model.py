@@ -190,6 +190,14 @@ class DigitalTwin(BaseModel):
     risk_history: list[float] = Field(default_factory=list)
     feature_history_summary: list[dict] = Field(default_factory=list)
 
+    # ── Tier 5 Reasoning Agent outputs ────────────────────────────────────────
+    last_narrative: str = ""
+    last_cot_trace: dict = Field(default_factory=dict)    # Full CoT JSON for audit
+    active_flags: list[dict] = Field(default_factory=list)   # ConcernFlag dicts
+    intent_signals: list[dict] = Field(default_factory=list) # IntentSignal dicts
+    last_reasoning_run_id: Optional[str] = None
+    last_reasoning_at: Optional[datetime] = None
+
     @field_validator("risk_history", mode="before")
     @classmethod
     def _cap_history(cls, v: list[float]) -> list[float]:
@@ -203,13 +211,23 @@ class DigitalTwin(BaseModel):
     # ── derived helpers ───────────────────────────────────────────────────────
 
     def derive_avatar(self) -> None:
-        """Recompute avatar_state from current twin metrics."""
+        """Recompute avatar_state from current twin metrics and Tier 5 flags."""
         expression: AvatarExpression = _EXPRESSION_MAP.get(self.liquidity_health, "calm")
+        
+        # Priority 1: Check for CRITICAL Tier 5 concern flags
+        has_critical = any(f.get("severity") == "CRITICAL" for f in self.active_flags)
+        if has_critical:
+            expression = "urgent"
+        elif any(f.get("severity") == "HIGH" for f in self.active_flags):
+            expression = "concerned"
+            
+        # Priority 2: Persona specific overrides
         if self.persona in _PERSONA_EXPRESSION_OVERRIDE:
             expression = _PERSONA_EXPRESSION_OVERRIDE[self.persona]
+            
         self.avatar_state = AvatarState(
             expression=expression,
-            mood_message=_PERSONA_MOOD.get(self.persona, _PERSONA_MOOD["unknown"]),
+            mood_message=self.last_narrative or _PERSONA_MOOD.get(self.persona, _PERSONA_MOOD["unknown"]),
             liquidity_label=self.liquidity_health,
         )
 

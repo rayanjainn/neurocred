@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Mic } from "lucide-react";
 import { cn } from "@/dib/utils";
 import { TwinEnergyAura } from "@/components/TwinEnergyAura";
 import { VoiceModal } from "@/components/voice/VoiceModal";
+
+const VOICE_PENDING_ACTION_KEY = "voice.pendingAction";
 
 interface DigitalTwinCardProps {
   score?: any;
@@ -41,6 +43,37 @@ const RISK_STYLES = {
 
   const risk = RISK_STYLES[twin.riskLevel] || RISK_STYLES.medium;
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
+
+  useEffect(() => {
+    const openTwin = () => setIsVoiceModalOpen(true);
+    const consumePending = () => {
+      const pending = window.sessionStorage.getItem(VOICE_PENDING_ACTION_KEY);
+      if (pending === "open_twin" || pending === "open_twin_chat") {
+        setIsVoiceModalOpen(true);
+        window.sessionStorage.removeItem(VOICE_PENDING_ACTION_KEY);
+      }
+    };
+
+    const handleUiAction = (event: Event) => {
+      const action = (event as CustomEvent<{ action?: string }>).detail?.action;
+      if (action === "open_twin" || action === "open_twin_chat") {
+        setIsVoiceModalOpen(true);
+        window.sessionStorage.removeItem(VOICE_PENDING_ACTION_KEY);
+      }
+    };
+
+    consumePending();
+
+    window.addEventListener("voice:open-digital-twin", openTwin);
+    window.addEventListener("voice:open-twin-chat", openTwin);
+    window.addEventListener("voice:ui-action", handleUiAction);
+
+    return () => {
+      window.removeEventListener("voice:open-digital-twin", openTwin);
+      window.removeEventListener("voice:open-twin-chat", openTwin);
+      window.removeEventListener("voice:ui-action", handleUiAction);
+    };
+  }, []);
 
   return (
     <motion.div

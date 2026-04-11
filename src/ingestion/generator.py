@@ -1514,7 +1514,7 @@ if __name__ == "__main__":
     fake = Faker("en_IN")
 
     logger.info(f"\n[generator] building {N_PROFILES} user profiles via SDV copula")
-    profiles = build_profiles(fake)
+    profiles = build_profiles(fake, n_profiles=N_PROFILES)
     write_profiles(profiles)
 
 

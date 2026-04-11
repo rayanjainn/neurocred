@@ -432,9 +432,177 @@ This document outlines all the available API endpoints in the Airavat backend (F
 
 ---
 
+## Tier 5: Reasoning Agent
+
+### 18. Run Reasoning Agent
+
+- **Endpoint**: `/reasoning/{user_id}/run`
+- **Method**: `POST`
+- **Description**: Triggers a full Tier 5 reasoning run. Analyzes contradictions, behavioral changes, and generates a Chain-of-Thought reasoning trace.
+- **Path Parameters**:
+  - `user_id` (string): The ID of the user.
+- **Request Body** (Optional):
+  ```json
+  {
+    "declared_income": 45000.0,
+    "is_first_run": false
+  }
+  ```
+- **Response Shape**:
+  ```json
+  {
+    "user_id": "u_001",
+    "run_id": "uuid-v4",
+    "situation": "lifestyle_inflation",
+    "confidence": 0.92,
+    "risk_narrative": "...",
+    "concern_flags_count": 2,
+    "intent_signals_count": 1,
+    "contradiction_detected": false,
+    "interrogation_needed": false
+  }
+  ```
+
+### 19. Get Reasoning Result
+
+- **Endpoint**: `/reasoning/{user_id}/result`
+- **Method**: `GET`
+- **Description**: Returns the full structured Tier 5 result from the latest run.
+- **Path Parameters**:
+  - `user_id` (string): The ID of the user.
+- **Response Shape**: Full `Tier5Result` object including `cot_trace`.
+
+### 20. Get Risk Narrative
+
+- **Endpoint**: `/reasoning/{user_id}/narrative`
+- **Method**: `GET`
+- **Description**: Lightweight endpoint returning only the risk narrative and active concern flags for frontend cards.
+- **Path Parameters**:
+  - `user_id` (string): The ID of the user.
+
+### 21. Get CoT Trace (Audit)
+
+- **Endpoint**: `/reasoning/{user_id}/cot`
+- **Method**: `GET`
+- **Description**: Returns the full 6-step Chain-of-Thought trace for regulatory audit.
+
+---
+
+## Tier 5: Conversational Interrogation
+
+### 22. Get Interrogation Session
+
+- **Endpoint**: `/reasoning/interrogation/{session_id}`
+- **Method**: `GET`
+- **Description**: Returns the current state of an interrogation session and the next question.
+
+### 23. Submit Interrogation Answer
+
+- **Endpoint**: `/reasoning/interrogation/{session_id}/answer`
+- **Method**: `POST`
+- **Description**: Submits an answer to the current question and advances the state machine.
+- **Request Body**:
+  ```json
+  {
+    "answer": "Yes, I have additional income from freelancing."
+  }
+  ```
+
+### 24. Abandon Interrogation
+
+- **Endpoint**: `/reasoning/interrogation/{session_id}/abandon`
+- **Method**: `DELETE`
+- **Description**: Abandons the session. Unanswered questions are converted into persistent `UNRESOLVED_AMBIGUITY` concern flags.
+
+---
+
+## Tier 9: Vigilance — Anomaly & Deception Detection
+
+### 25. Run Vigilance Agent
+
+- **Endpoint**: `/vigilance/{user_id}/run`
+- **Method**: `POST`
+- **Description**: Triggers a full Tier 9 vigilance run — Fraud Ring Detection, Social Engineering Defence, Bot Detection, Stress Analysis, Income Underreporting, and Identity Shift.
+- **Path Parameters**:
+  - `user_id` (string): The ID of the user.
+- **Request Body** (all optional):
+  ```json
+  {
+    "upi_events": [...],
+    "sms_texts": [{"text": "Your account will be blocked...", "sender_id": "TM-HDFCBK"}],
+    "declared_income": 45000.0,
+    "cohort_mean_income": 48000.0,
+    "cohort_std_income": 12000.0
+  }
+  ```
+- **Response Shape**:
+  ```json
+  {
+    "user_id": "u_001",
+    "run_id": "uuid-v4",
+    "deception_score": 0.12,
+    "overall_risk": "LOW",
+    "fraud_ring_flag": false,
+    "fraud_confidence": 0.05,
+    "scam_probability": 0.03,
+    "pagerank_score": 0.002,
+    "bot_flag": false,
+    "mule_flag": false,
+    "stress_score": 0.21,
+    "underreport_score": 0.08,
+    "identity_shift_score": 0.10
+  }
+  ```
+
+### 26. Get Vigilance Result
+
+- **Endpoint**: `/vigilance/{user_id}/result`
+- **Method**: `GET`
+- **Description**: Returns the full Tier 9 result including all module outputs (cached 24h).
+
+### 27. Get Vigilance Summary
+
+- **Endpoint**: `/vigilance/{user_id}/summary`
+- **Method**: `GET`
+- **Description**: Lightweight summary for frontend dashboard. Includes JS-divergence, stress trend, and all risk flags.
+
+### 28. Analyze Scam (Ad-hoc)
+
+- **Endpoint**: `/vigilance/scam/analyze`
+- **Method**: `POST`
+- **Description**: Analyze a single SMS/voice transcript without needing a pre-computed feature vector.
+- **Request Body**:
+  ```json
+  {
+    "user_id": "u_0001",
+    "text": "Dear customer, your account will be suspended. Share OTP immediately.",
+    "sender_id": "TM-SCAMR"
+  }
+  ```
+- **Response Shape**:
+  ```json
+  {
+    "scam_probability": 0.92,
+    "is_scam_alert": true,
+    "urgency_score": 0.85,
+    "authority_score": 0.0,
+    "otp_phishing_score": 0.90,
+    "risk_level": "CRITICAL",
+    "recommended_action": "ALERT: Block transaction and notify user."
+  }
+  ```
+
+### 29. Vigilance Stream Status
+
+- **Endpoint**: `/vigilance/stream/status`
+- **Method**: `GET`
+- **Description**: Returns the depth of the `stream:vigilance_events` Redis stream.
+
+---
+
 ## Tier 7: Cognitive Credit Engine
 
-### 18. Submit Credit Score Request
+### 25. Submit Credit Score Request
 
 - **Endpoint**: `/credit/score`
 - **Method**: `POST`
@@ -454,7 +622,7 @@ This document outlines all the available API endpoints in the Airavat backend (F
   }
   ```
 
-### 19. Get Credit Score Result
+### 26. Get Credit Score Result
 
 - **Endpoint**: `/credit/score/{task_id}`
 - **Method**: `GET`
@@ -485,7 +653,7 @@ This document outlines all the available API endpoints in the Airavat backend (F
   }
   ```
 
-### 20. Stream Credit Score Progress
+### 27. Stream Credit Score Progress
 
 - **Endpoint**: `/credit/score/{task_id}/stream`
 - **Method**: `GET`
@@ -494,7 +662,7 @@ This document outlines all the available API endpoints in the Airavat backend (F
   - `task_id` (string): The task ID to monitor.
 - **Response Mode**: `text/event-stream`
 
-### 21. Get Latest Credit Status
+### 28. Get Latest Credit Status
 
 - **Endpoint**: `/credit/{user_id}/status`
 - **Method**: `GET`
@@ -512,7 +680,7 @@ This document outlines all the available API endpoints in the Airavat backend (F
   }
   ```
 
-### 22. Cognitive Credit Audit Replay
+### 29. Cognitive Credit Audit Replay
 
 - **Endpoint**: `/credit/audit/replay`
 - **Method**: `POST`
@@ -526,7 +694,7 @@ This document outlines all the available API endpoints in the Airavat backend (F
   ```
 - **Response Shape**: Scoring result object as it would have appeared at the target timestamp.
 
-### 23. Credit Engine Health
+### 30. Credit Engine Health
 
 - **Endpoint**: `/credit/health`
 - **Method**: `GET`
