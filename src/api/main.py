@@ -43,6 +43,7 @@ import json
 import os
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator
 from urllib.parse import urlencode
 from xml.sax.saxutils import escape
@@ -512,12 +513,84 @@ async def get_twin(user_id: str) -> dict[str, Any]:
     data = twin.model_dump()
     data["cibil_like_score"] = twin.cibil_like_score()
 
-    # Add transaction timeline for visualization
-    from src.api.portal_routes import build_monthly_timeline, window_agg
-    timeline = build_monthly_timeline(user_id, months=12)
+    # Prefer generated raw transaction data for timeline; fall back to synthetic timeline.
+    from src.api.portal_routes import _get_real_transactions, build_monthly_timeline, window_agg
+
+    timeline: list[dict[str, Any]] = []
+    upi_txns, ewb_txns = _get_real_transactions(user_id, limit=5000)
+    by_day: dict[str, dict[str, float]] = {}
+
+    def _as_day(ts: Any) -> str | None:
+        if isinstance(ts, datetime):
+            return ts.date().isoformat()
+        if isinstance(ts, str) and ts:
+            return ts[:10]
+        return None
+
+    for tx in upi_txns:
+        day = _as_day(tx.get("timestamp") or tx.get("date"))
+        if not day:
+            continue
+        bucket = by_day.setdefault(
+            day,
+            {
+                "daily_volume": 0.0,
+                "daily_count": 0.0,
+                "daily_ewb_volume": 0.0,
+                "daily_ewb_count": 0.0,
+            },
+        )
+        try:
+            amount = abs(float(tx.get("amount", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            amount = 0.0
+        bucket["daily_volume"] += amount
+        bucket["daily_count"] += 1.0
+
+    for bill in ewb_txns:
+        day = _as_day(bill.get("timestamp"))
+        if not day:
+            continue
+        bucket = by_day.setdefault(
+            day,
+            {
+                "daily_volume": 0.0,
+                "daily_count": 0.0,
+                "daily_ewb_volume": 0.0,
+                "daily_ewb_count": 0.0,
+            },
+        )
+        try:
+            total_value = abs(float(bill.get("totalValue", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            total_value = 0.0
+        bucket["daily_ewb_volume"] += total_value
+        bucket["daily_ewb_count"] += 1.0
+
+    if by_day:
+        today = datetime.utcnow().date()
+        start = today - timedelta(days=364)
+        for i in range(365):
+            day = (start + timedelta(days=i)).isoformat()
+            bucket = by_day.get(day)
+            timeline.append(
+                {
+                    "date": day,
+                    "daily_volume": int((bucket or {}).get("daily_volume", 0.0)),
+                    "daily_count": int((bucket or {}).get("daily_count", 0.0)),
+                    "daily_ewb_volume": int((bucket or {}).get("daily_ewb_volume", 0.0)),
+                    "daily_ewb_count": int((bucket or {}).get("daily_ewb_count", 0.0)),
+                }
+            )
+    else:
+        timeline = build_monthly_timeline(user_id, months=12)
+
     data["upi_timeline"] = [{"date": t["date"], "volume": t["daily_volume"], "count": t["daily_count"]} for t in timeline]
     data["ewb_timeline"] = [{"date": t["date"], "volume": t["daily_ewb_volume"], "count": t["daily_ewb_count"]} for t in timeline]
-    data["data_maturity_months"] = 12
+    nonzero_days = [
+        t for t in timeline if (t["daily_volume"] > 0 or t["daily_ewb_volume"] > 0)
+    ]
+    data["data_maturity_months"] = len({t["date"][:7] for t in nonzero_days}) or 1
     data["windows"] = {
         "w30": window_agg(timeline, 30),
         "w60": window_agg(timeline, 60),

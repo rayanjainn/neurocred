@@ -1019,7 +1019,15 @@ async def get_explorer_gstins() -> list[dict[str, Any]]:
     seen = set()
     for gstin, name in _GSTIN_NAMES.items():
         score = _GSTIN_SCORES.get(gstin)
-        band = score["risk_band"] if score else "low_risk"
+        if score:
+            score_val = int(score.get("credit_score", 700))
+            band = str(score.get("risk_band", "low_risk"))
+        else:
+            disk_row = _find_entity_on_disk(gstin)
+            profile_type = (disk_row or {}).get("profile_type", "HEALTHY_MSME")
+            age_months = int((disk_row or {}).get("age_months", 24) or 24)
+            score_val, band = _get_generated_score_and_band(profile_type, age_months, gstin)
+
         profile = "FRAUD_SHELL" if band == "high_risk" else (
             "STRUGGLING_MSME" if band == "medium_risk" else "HEALTHY_MSME"
         )
@@ -1029,7 +1037,7 @@ async def get_explorer_gstins() -> list[dict[str, Any]]:
             "profile_type": profile,
             "state_code": gstin[:2],
             "business_age_months": 12 + (ord(gstin[0]) % 36),
-            "credit_score": score.get("credit_score") if score else 700,
+            "credit_score": score_val,
             "risk_band": band,
         })
         seen.add(gstin)
@@ -1048,6 +1056,9 @@ async def get_explorer_gstins() -> list[dict[str, Any]]:
                     continue
                 
                 score_val, band = _get_generated_score_and_band(row["profile_type"], row.get("age_months", 24), g)
+                score_row = _GSTIN_SCORES.get(g)
+                final_score = int(score_row.get("credit_score", score_val)) if score_row else score_val
+                final_band = str(score_row.get("risk_band", band)) if score_row else band
                 
                 result.append({
                     "gstin": g,
@@ -1055,8 +1066,8 @@ async def get_explorer_gstins() -> list[dict[str, Any]]:
                     "profile_type": row["profile_type"],
                     "state_code": row.get("state_code", g[:2]),
                     "business_age_months": row.get("age_months", 24),
-                    "credit_score": score.get("credit_score") if score else score_val,
-                    "risk_band": score.get("risk_band") if score else band,
+                    "credit_score": final_score,
+                    "risk_band": final_band,
                 })
                 seen.add(g)
         except Exception as e:
@@ -1130,6 +1141,11 @@ def window_agg(timeline: list[dict], days: int) -> dict:
         "ewb_count": sum(t["daily_ewb_count"] for t in subset),
         "avg_daily_upi": int(sum(t["daily_volume"] for t in subset) / max(1, len(subset))),
     }
+
+
+def _window_agg(timeline: list[dict], days: int) -> dict:
+    """Backward-compatible alias for existing call sites."""
+    return window_agg(timeline, days)
 
 
 # ── Real Data Bootstraper ───────────────────────────────────────────────────
@@ -1253,35 +1269,380 @@ def _get_real_transactions(identifier: str, limit: int = 50):
         _log.error(f"[PIPELINE] TXN_FETCH_ERROR for {identifier}: {e}")
         return [], []
 
+
+def _resolve_entity_ids(identifier: str) -> set[str]:
+    """Resolve equivalent IDs (gstin, user_id, vpa, upi_id) for stream filtering."""
+    ident = str(identifier).strip()
+    ids = {ident}
+
+    # In-memory users first
+    for u in _STORE.get("users", []):
+        if u.get("id") == ident or u.get("gstin") == ident:
+            if u.get("id"):
+                ids.add(str(u["id"]))
+            if u.get("gstin"):
+                ids.add(str(u["gstin"]))
+            if u.get("vpa"):
+                ids.add(str(u["vpa"]))
+            if u.get("upi_id"):
+                ids.add(str(u["upi_id"]))
+
+    # Generated profile parquet for full identity mapping
+    p_path = Path("data/raw/user_profiles.parquet")
+    if p_path.exists():
+        try:
+            df_u = pl.read_parquet(p_path)
+            match = df_u.filter(
+                (pl.col("gstin") == ident)
+                | (pl.col("user_id") == ident)
+                | (pl.col("vpa") == ident)
+                | (pl.col("upi_id") == ident)
+            ).to_dicts()
+            if match:
+                row = match[0]
+                if row.get("user_id"):
+                    ids.add(str(row["user_id"]))
+                if row.get("gstin"):
+                    ids.add(str(row["gstin"]))
+                if row.get("vpa"):
+                    ids.add(str(row["vpa"]))
+                if row.get("upi_id"):
+                    ids.add(str(row["upi_id"]))
+        except Exception as e:
+            _log.warning(f"[PIPELINE] identity resolve fallback for {ident}: {e}")
+
+    return ids
+
+
+async def _get_stream_transactions(request: Request, identifier: str, limit: int = 20000) -> tuple[list[dict], list[dict]]:
+    """
+    Pull latest typed events for an entity directly from Redis Streams.
+    Returns (recent_upi, recent_ewb) shaped for the explorer UI.
+    """
+    redis = request.app.state.redis
+    target_ids = _resolve_entity_ids(identifier)
+    stream_key = getattr(settings, "stream_typed", "stream:typed_events")
+
+    def _as_float(raw: Any, default: float = 0.0) -> float:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
+    def _as_date(ts: str) -> str:
+        return ts[:10] if ts else ""
+
+    try:
+        rows = await redis.xrevrange(stream_key, "+", "-", count=limit)
+    except Exception as e:
+        _log.error(f"[PIPELINE] STREAM_READ_ERROR {stream_key}: {e}")
+        rows = []
+
+    upi_results: list[dict] = []
+    ewb_results: list[dict] = []
+
+    for stream_id, fields in rows:
+        user_id = str(fields.get("user_id", ""))
+        if user_id not in target_ids:
+            continue
+
+        src = str(fields.get("source_provenance", ""))
+        channel = str(fields.get("channel", ""))
+        ts = str(fields.get("timestamp", ""))
+        day = _as_date(ts)
+
+        amount = _as_float(fields.get("amount", 0), 0.0)
+
+        if src == "eway_bill_nic":
+            ewb_results.append(
+                {
+                    "ewb_no": fields.get("event_id", stream_id),
+                    "totalValue": abs(amount),
+                    "timestamp": ts,
+                    "date": day,
+                    "mainHsnCode": str(fields.get("merchant_category") or "N/A"),
+                    "fromGstin": fields.get("reference_id") or "UNKNOWN",
+                    "toGstin": fields.get("merchant_name") or "UNKNOWN",
+                }
+            )
+            continue
+
+        if src == "upi_api" or channel == "UPI":
+            upi_results.append(
+                {
+                    "type": "UPI",
+                    "txn_id": fields.get("event_id", stream_id),
+                    "amount": abs(amount),
+                    "timestamp": ts,
+                    "date": day,
+                    "direction": "inbound" if amount >= 0 else "outbound",
+                    "counterparty_vpa": fields.get("merchant_name") or "unknown@upi",
+                    "merchant_category": fields.get("merchant_category") or "GENERAL",
+                }
+            )
+
+    # Fallback 1: Use dedicated UPI stream when typed stream is empty/not available.
+    if not upi_results:
+        try:
+            upi_rows = await redis.xrevrange(settings.stream_upi, "+", "-", count=limit)
+        except Exception as e:
+            _log.warning(f"[PIPELINE] UPI_STREAM_FALLBACK_ERROR {settings.stream_upi}: {e}")
+            upi_rows = []
+
+        for stream_id, fields in upi_rows:
+            user_id = str(fields.get("user_id", ""))
+            if user_id not in target_ids:
+                continue
+
+            ts = str(fields.get("timestamp", ""))
+            day = _as_date(ts)
+            amount_raw = _as_float(fields.get("amount", 0), 0.0)
+
+            direction_raw = str(fields.get("direction", "")).upper()
+            if direction_raw == "INBOUND":
+                direction = "inbound"
+            elif direction_raw == "OUTBOUND":
+                direction = "outbound"
+            else:
+                direction = "inbound" if amount_raw >= 0 else "outbound"
+
+            upi_results.append(
+                {
+                    "type": "UPI",
+                    "txn_id": fields.get("event_id", stream_id),
+                    "amount": abs(amount_raw),
+                    "timestamp": ts,
+                    "date": day,
+                    "direction": direction,
+                    "counterparty_vpa": fields.get("merchant_name") or "unknown@upi",
+                    "merchant_category": fields.get("merchant_name") or "GENERAL",
+                }
+            )
+
+    # Fallback 1b: Use raw ingestion stream (deep window) for sparse entities.
+    if not upi_results:
+        raw_limit = max(limit, 50_000)
+        try:
+            raw_rows = await redis.xrevrange("stream:raw_ingestion", "+", "-", count=raw_limit)
+        except Exception as e:
+            _log.warning(f"[PIPELINE] RAW_STREAM_FALLBACK_ERROR stream:raw_ingestion: {e}")
+            raw_rows = []
+
+        for stream_id, fields in raw_rows:
+            user_id = str(fields.get("user_id", ""))
+            if user_id not in target_ids:
+                continue
+
+            src = str(fields.get("source_provenance", ""))
+            channel = str(fields.get("channel", ""))
+            if src != "upi_api" and channel != "UPI":
+                continue
+
+            ts = str(fields.get("timestamp", ""))
+            day = _as_date(ts)
+            amount_raw = _as_float(fields.get("amount", 0), 0.0)
+
+            upi_results.append(
+                {
+                    "type": "UPI",
+                    "txn_id": fields.get("event_id", stream_id),
+                    "amount": abs(amount_raw),
+                    "timestamp": ts,
+                    "date": day,
+                    "direction": "inbound" if amount_raw >= 0 else "outbound",
+                    "counterparty_vpa": fields.get("merchant_name") or "unknown@upi",
+                    "merchant_category": fields.get("merchant_name") or "GENERAL",
+                }
+            )
+
+    # Fallback 2: Use dedicated e-way stream for logistics timeline.
+    if not ewb_results:
+        try:
+            ewb_rows = await redis.xrevrange("stream:eway_bills", "+", "-", count=limit)
+        except Exception as e:
+            _log.warning(f"[PIPELINE] EWAY_STREAM_FALLBACK_ERROR stream:eway_bills: {e}")
+            ewb_rows = []
+
+        for stream_id, fields in ewb_rows:
+            gstin = str(fields.get("gstin", ""))
+            user_gstin = str(fields.get("userGstin", ""))
+            from_gstin = str(fields.get("fromGstin", ""))
+            to_gstin = str(fields.get("toGstin", ""))
+
+            # Match on any identity relation to the selected entity.
+            if not (
+                gstin in target_ids
+                or user_gstin in target_ids
+                or from_gstin in target_ids
+                or to_gstin in target_ids
+            ):
+                continue
+
+            ts = str(fields.get("timestamp", ""))
+            day = _as_date(ts)
+            total_value = _as_float(fields.get("totalValue"), _as_float(fields.get("totInvValue"), 0.0))
+
+            ewb_results.append(
+                {
+                    "ewb_no": fields.get("eway_id") or fields.get("event_id") or stream_id,
+                    "totalValue": abs(total_value),
+                    "timestamp": ts,
+                    "date": day,
+                    "mainHsnCode": str(fields.get("mainHsnCode") or "N/A"),
+                    "fromGstin": from_gstin or "UNKNOWN",
+                    "toGstin": to_gstin or "UNKNOWN",
+                }
+            )
+
+    # Fallback 3: If no e-way records, use GST invoices as logistics proxy for MSME entities.
+    if not ewb_results:
+        try:
+            gst_rows = await redis.xrevrange("stream:gst_invoices", "+", "-", count=limit)
+        except Exception as e:
+            _log.warning(f"[PIPELINE] GST_STREAM_FALLBACK_ERROR stream:gst_invoices: {e}")
+            gst_rows = []
+
+        for stream_id, fields in gst_rows:
+            gstin = str(fields.get("gstin", ""))
+            buyer_gstin = str(fields.get("buyer_gstin", ""))
+            if gstin not in target_ids and buyer_gstin not in target_ids:
+                continue
+
+            ts = str(fields.get("timestamp", ""))
+            day = _as_date(ts)
+            taxable = _as_float(fields.get("taxable_value"), 0.0)
+            gst_amt = _as_float(fields.get("gst_amount"), 0.0)
+
+            ewb_results.append(
+                {
+                    "ewb_no": fields.get("invoice_id") or fields.get("event_id") or stream_id,
+                    "totalValue": abs(taxable + gst_amt),
+                    "timestamp": ts,
+                    "date": day,
+                    "mainHsnCode": "GST",
+                    "fromGstin": gstin or "UNKNOWN",
+                    "toGstin": buyer_gstin or "UNKNOWN",
+                }
+            )
+
+    # Fallback 4: Use generated parquet transactions when stream coverage is sparse.
+    # This keeps explorer graphs populated from true generated data even if stream windows are shallow.
+    if len(upi_results) < 20 or not ewb_results:
+        pq_upi, pq_ewb = _get_real_transactions(identifier, limit=max(limit, 50_000))
+
+        if len(upi_results) < 20 and len(pq_upi) > len(upi_results):
+            upi_results = pq_upi
+
+        if not ewb_results and pq_ewb:
+            ewb_results = pq_ewb
+
+    return upi_results, ewb_results
+
+
+def _build_daily_timeline_from_stream(upi_txns: list[dict], ewb_txns: list[dict], days: int = 365) -> list[dict]:
+    """Aggregate stream transactions to daily points for timeline charts."""
+    by_day: dict[str, dict[str, float]] = {}
+
+    for tx in upi_txns:
+        day = str(tx.get("date") or tx.get("timestamp") or "")[:10]
+        if not day:
+            continue
+        b = by_day.setdefault(
+            day,
+            {
+                "daily_volume": 0.0,
+                "daily_count": 0.0,
+                "daily_ewb_volume": 0.0,
+                "daily_ewb_count": 0.0,
+            },
+        )
+        b["daily_volume"] += float(tx.get("amount", 0.0) or 0.0)
+        b["daily_count"] += 1.0
+
+    for tx in ewb_txns:
+        day = str(tx.get("date") or tx.get("timestamp") or "")[:10]
+        if not day:
+            continue
+        b = by_day.setdefault(
+            day,
+            {
+                "daily_volume": 0.0,
+                "daily_count": 0.0,
+                "daily_ewb_volume": 0.0,
+                "daily_ewb_count": 0.0,
+            },
+        )
+        b["daily_ewb_volume"] += float(tx.get("totalValue", 0.0) or 0.0)
+        b["daily_ewb_count"] += 1.0
+
+    if not by_day:
+        return []
+
+    # Fit timeline to actual available data span (no extra dead space before/after).
+    parsed_days = []
+    for d in by_day.keys():
+        try:
+            parsed_days.append(datetime.fromisoformat(d).date())
+        except ValueError:
+            continue
+
+    if not parsed_days:
+        return []
+
+    start_date = min(parsed_days)
+    end_date = max(parsed_days)
+    span_days = (end_date - start_date).days + 1
+
+    timeline: list[dict] = []
+    for i in range(span_days):
+        day = (start_date + timedelta(days=i)).isoformat()
+        b = by_day.get(day, {})
+        timeline.append(
+            {
+                "date": day,
+                "daily_volume": int(b.get("daily_volume", 0.0)),
+                "daily_count": int(b.get("daily_count", 0.0)),
+                "daily_ewb_volume": int(b.get("daily_ewb_volume", 0.0)),
+                "daily_ewb_count": int(b.get("daily_ewb_count", 0.0)),
+            }
+        )
+    return timeline
+
 @router.get("/explorer/{gstin}/details")
-async def get_explorer_details(gstin: str) -> dict[str, Any]:
+async def get_explorer_details(gstin: str, request: Request) -> dict[str, Any]:
     _pipeline_log("EXPLORER_PROFILE", f"assembling 360-view for GSTIN={gstin}")
     name = _GSTIN_NAMES.get(gstin, f"MSME {gstin[:6]}")
     score = _GSTIN_SCORES.get(gstin)
-    
+
+    # Pull canonical profile metadata from generated user profiles when available.
+    disk_row = _find_entity_on_disk(gstin)
+
     # Try to find real identifier in user store to get correct persona
     user = next((u for u in _STORE["users"] if u.get("gstin") == gstin), None)
     profile_type = "HEALTHY_MSME"
     age_months = 12 + (ord(gstin[0]) % 36)
+    if disk_row:
+        profile_type = str(disk_row.get("profile_type") or profile_type)
+        age_months = int(disk_row.get("age_months") or age_months)
     if user:
-        profile_type = user.get("profile_type", "HEALTHY_MSME")
-        age_months = user.get("business_age_months", age_months)
+        profile_type = str(user.get("profile_type", profile_type))
+        age_months = int(user.get("business_age_months", age_months))
 
-    band = score["risk_band"] if score else ("low_risk")
-    profile = "FRAUD_SHELL" if band == "high_risk" else (
-        "STRUGGLING_MSME" if band == "medium_risk" else "HEALTHY_MSME"
-    )
+    if score:
+        score_val = int(score.get("credit_score", 700))
+        band = str(score.get("risk_band", "low_risk"))
+    else:
+        score_val, band = _get_generated_score_and_band(profile_type, age_months, gstin)
 
-    # FETCH REAL DATA
-    upi_txns, ewb_txns = _get_real_transactions(gstin, limit=50)
-    
-    timeline = build_monthly_timeline(gstin, months=12)
+    # Fetch real event data from Redis stream (Tier 2 typed events).
+    upi_txns, ewb_txns = await _get_stream_transactions(request, gstin, limit=60_000)
+    timeline = _build_daily_timeline_from_stream(upi_txns, ewb_txns, days=365)
     
     return {
         "info": {
             "gstin": gstin, "business_name": name, "profile_type": profile_type,
             "state_code": gstin[:2], "business_age_months": age_months,
-            "credit_score": score["credit_score"] if score else None,
+            "credit_score": score_val,
             "risk_band": band,
         },
         "upi_timeline": [{"date": t["date"], "daily_volume": t["daily_volume"],
@@ -1295,8 +1656,8 @@ async def get_explorer_details(gstin: str) -> dict[str, Any]:
             "w365": window_agg(timeline, 365),
         },
         "score_history": _STORE["score_history"].get(gstin, []),
-        "recent_upi": upi_txns,
-        "recent_ewb": ewb_txns,
+        "recent_upi": upi_txns[:200],
+        "recent_ewb": ewb_txns[:200],
     }
 
 

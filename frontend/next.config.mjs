@@ -1,4 +1,6 @@
 /** @type {import('next').NextConfig} */
+const backendTarget = process.env.API_PROXY_TARGET || "http://127.0.0.1:8001";
+
 const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
@@ -11,7 +13,7 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: 'http://127.0.0.1:8001/:path*' 
+        destination: `${backendTarget}/:path*`
       }
     ]
   }
