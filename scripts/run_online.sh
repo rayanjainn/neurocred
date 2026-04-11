@@ -21,5 +21,13 @@ bash "$SCRIPT_DIR/phase4_train.sh"
 echo "=== Phase 5: Run tests ==="
 bash "$SCRIPT_DIR/phase5_tests.sh"
 
-echo "=== Phase 6: Start API server ==="
-bash "$SCRIPT_DIR/phase6_api.sh"
+echo "=== Phase 6: Start API server (Background) ==="
+bash "$SCRIPT_DIR/phase6_api.sh" &
+API_PID=$!
+echo "API Server started with PID: $API_PID"
+
+echo "=== Phase 7: Start Frontend ==="
+bash "$SCRIPT_DIR/phase7_frontend.sh"
+
+# Wait for background processes
+wait $API_PID
