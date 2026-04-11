@@ -258,7 +258,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-h-screen w-full">
         <aside
           className={cn(
-            "relative overflow-hidden hidden md:flex shrink-0 border-r border-white/20 bg-background/60 backdrop-blur-2xl shadow-[8px_0_32px_rgba(0,0,0,0.25)] transition-all duration-300",
+            "sticky top-0 h-screen overflow-hidden hidden md:flex shrink-0 border-r border-white/20 bg-background/60 backdrop-blur-2xl shadow-[8px_0_32px_rgba(0,0,0,0.25)] transition-all duration-300 z-50",
             sidebarCollapsed ? "w-20" : "w-72",
           )}
         >
