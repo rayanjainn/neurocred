@@ -22,7 +22,7 @@ On every new event, real-time 7-day, 30-day, and 90-day summaries are updated (t
 **Exponential Moving Average (EMA) for velocity features** (preferred to avoid cliff effects):
 
 $$
-v_{\text{ema}}(w) = \sum_{i} amount_i \cdot \exp\left(-\frac{\ln 2}{w} \cdot (t_{\text{now}} - t_i)\right)
+V_{\text{EMA}}(w) = \sum_{i} \text{Amount}_{i} \cdot \exp\left(-\frac{\ln 2}{w} \cdot (t_{\text{now}} - t_i)\right)
 $$
 
 where \( w \) is the half-life window in days (7, 30, or 90).
@@ -30,11 +30,11 @@ where \( w \) is the half-life window in days (7, 30, or 90).
 **Simple sum and count in sliding window**:
 
 $$
-\text{sum}_w = \sum_{\text{events in last } w \text{ days}} amount_i
+\text{Sum}_w = \sum_{\text{events in last } w \text{ days}} \text{Amount}_{i}
 $$
 
 $$
-\text{count}_w = |\{ \text{events in last } w \text{ days} \}|
+\text{Count}_w = |\{ \text{events in last } w \text{ days} \}|
 $$
 
 These aggregates serve as inputs for all Tier 3 behavioural features. Late-arrival events trigger re-computation of affected windows.
@@ -44,7 +44,7 @@ These aggregates serve as inputs for all Tier 3 behavioural features. Late-arriv
 Daily Average Throughput (30d):
 
 $$
-\text{daily\_avg\_throughput}_{30d} = \frac{1}{30} \sum_{d=1}^{30} (\text{inflow}_d + \text{outflow}_d)
+\text{Daily Avg Throughput}_{30d} = \frac{1}{30} \sum_{d=1}^{30} (\text{Inflow}_d + \text{Outflow}_d)
 $$
 
 ## 2. Cash Flow & Liquidity Features (Tier 3)
@@ -52,19 +52,19 @@ $$
 Cash Buffer Days (survival runway):
 
 $$
-\text{cash\_buffer\_days} = \min\left( \frac{\text{avg inbound}_{30d}}{\text{avg daily outflow}_{30d}}, 90 \right)
+\text{Cash Buffer Days} = \min\left( \frac{\text{Avg Inbound}_{30d}}{\text{Avg Daily Outflow}_{30d}}, 90 \right)
 $$
 
 Debit Failure Rate (90d):
 
 $$
-\text{debit\_failure\_rate}_{90d} = \frac{\sum \text{failed outbound transactions}_{90d}}{\sum \text{total outbound transactions}_{90d}}
+\text{Debit Failure Rate}_{90d} = \frac{\sum \text{Failed Outbound Transactions}_{90d}}{\sum \text{Total Outbound Transactions}_{90d}}
 $$
 
 End-of-Month Liquidity Dip:
 
 $$
-\text{eom\_liquidity\_dip} = \frac{1}{N} \sum_{m=1}^{N} (\text{balance}_{\text{end of month } m} - \text{balance}_{25\text{th of month } m})
+\text{EOM Liquidity Dip} = \frac{1}{N} \sum_{m=1}^{N} (\text{Balance}_{\text{end of month } m} - \text{Balance}_{25\text{th of month } m})
 $$
 
 ## 3. Behavioural & Ratio Features (Tier 3)
@@ -72,43 +72,43 @@ $$
 Spending Volatility Index:
 
 $$
-\text{spending\_volatility\_index} = \frac{\sigma(\text{daily\_expenses}_{90d})}{\mu(\text{daily\_expenses}_{90d})}
+\text{Spending Volatility Index} = \frac{\sigma(\text{Daily Expenses}_{90d})}{\mu(\text{Daily Expenses}_{90d})}
 $$
 
 Income Stability Score:
 
 $$
-\text{income\_stability\_score} = \max\left(0, \min\left(1, 1 - \frac{\sigma(\text{income\_amounts}_{90d})}{\mu(\text{income\_amounts}_{90d})}\right)\right)
+\text{Income Stability Score} = \max\left(0, \min\left(1, 1 - \frac{\sigma(\text{Income Amounts}_{90d})}{\mu(\text{Income Amounts}_{90d})}\right)\right)
 $$
 
 Discretionary Ratio:
 
 $$
-\text{discretionary\_ratio} = \frac{\sum \text{discretionary expenses}_{90d}}{\sum \text{total expenses}_{90d}}
+\text{Discretionary Ratio} = \frac{\sum \text{Discretionary Expenses}_{90d}}{\sum \text{Total Expenses}_{90d}}
 $$
 
 EMI Burden Ratio:
 
 $$
-\text{emi\_burden\_ratio} = \frac{\sum (\text{EMI} + \text{subscription outflows})_{30d}}{\text{avg monthly income}}
+\text{EMI Burden Ratio} = \frac{\sum (\text{EMI} + \text{Subscription Outflows})_{30d}}{\text{Avg Monthly Income}}
 $$
 
 Savings Rate:
 
 $$
-\text{savings\_rate} = \frac{\text{total income} - \text{essential expenses} - \text{discretionary expenses}}{\text{total income}}
+\text{Savings Rate} = \frac{\text{Total Income} - \text{Essential Expenses} - \text{Discretionary Expenses}}{\text{Total Income}}
 $$
 
 Cash Dependency Index:
 
 $$
-\text{cash\_dependency\_index} = \frac{\sum \text{cash/ATM withdrawals}_{90d}}{\sum \text{total outflows}_{90d}}
+\text{Cash Dependency Index} = \frac{\sum \text{Cash/ATM Withdrawals}_{90d}}{\sum \text{Total Outflows}_{90d}}
 $$
 
 Top-3 Merchant Concentration (Herfindahl-Hirschman style):
 
 $$
-\text{top3\_concentration} = \sum_{i=1}^{3} \left( \frac{\text{amount to merchant}_i}{\text{total spend}} \right)^2
+\text{Top-3 Concentration} = \sum_{i=1}^{3} \left( \frac{\text{Amount to Merchant}_i}{\text{Total Spend}} \right)^2
 $$
 
 ## 4. Recurrence & Pattern Detection (Tier 3)
@@ -116,7 +116,7 @@ $$
 Lifestyle Inflation Trend (MoM % change in discretionary spending):
 
 $$
-\text{lifestyle\_inflation\_trend} = \frac{\text{discretionary}_m - \text{discretionary}_{m-1}}{\text{discretionary}_{m-1}}
+\text{Lifestyle Inflation Trend} = \frac{\text{Discretionary}_m - \text{Discretionary}_{m-1}}{\text{Discretionary}_{m-1}}
 $$
 
 Merchant Category Shift Count:
@@ -143,7 +143,7 @@ Anomaly Flag: Output of lightweight Isolation Forest or rule-based z-score on am
 Peer Cohort Benchmark Deviation (Z-score):
 
 $$
-z = \frac{x_{\text{user}} - \mu_{\text{cohort}}}{\sigma_{\text{cohort}}}
+z = \frac{X_{\text{user}} - \mu_{\text{cohort}}}{\sigma_{\text{cohort}}}
 $$
 
 where cohort is segmented by income band, city tier, and age group.
@@ -167,7 +167,7 @@ $$
 Composite example (can feed into ML model):
 
 $$
-\text{Health Score} = w_1(1 - \text{emi\_burden\_ratio}) + w_2 \cdot \text{savings\_rate} + w_3 \cdot \text{income\_stability\_score} - w_4 \cdot \text{spending\_volatility\_index} - w_5 \cdot |z_{\text{peer}}|
+\text{Health Score} = w_1(1 - \text{EMI Burden Ratio}) + w_2 \cdot \text{Savings Rate} + w_3 \cdot \text{Income Stability Score} - w_4 \cdot \text{Spending Volatility Index} - w_5 \cdot |z_{\text{Peer}}|
 $$
 
 **Typical starting weights** (normalize to sum ≈ 1.0):
