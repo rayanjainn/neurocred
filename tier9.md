@@ -32,7 +32,7 @@ While NetworkX handles explicit cycles, a **Graph Neural Network (GNN)**—speci
 
 ## 3. Social Engineering Defence Module
 
-This module protects MSMEs from active phishing and authority impersonation by analyzing SMS and voice transcripts (Tier 6 STT output).
+This module protects individuals and MSMEs from active phishing and authority impersonation by analyzing SMS and voice transcripts (Tier 6 STT output).
 
 | Mechanism | Selected Tech Stack | Rejected Alternatives | Advantages (Why FinTwin?) |
 |---|---|---|---|
@@ -59,7 +59,7 @@ Identifies accounts that lack "Human Transactional DNA"—indicative of automate
 | **Deception Signal** | **PageRank Score** | Simple Degree Centrality | **Structural**: Detects "Hub-and-Spoke" laundering patterns where money funnels through a single newly-created node. |
 
 ### 4.1 Behavioural Consistency Score
-To differentiate between a human business owner and an automated "Money Mule" / "Bot Account," the engine computes a **Consistency Score** [0.0–1.0]:
+To differentiate between a human user or business owner and an automated "Money Mule" / "Bot Account," the engine computes a **Consistency Score** [0.0–1.0]:
 - **Improbable Precision**: Identifies transaction intervals that are too consistent for human behavior (e.g., a transaction occurring exactly every 3600.00 seconds).
 - **Network Improbability**: Flags nodes that have high-value inflows from multiple unrelated sources but only outbound to a single "Collector Hub" (detected via High PageRank + Low Tier 3 Feature Maturity).
 - **Mule-Account DNA**: Users whose transaction patterns match known "Laundering Templates" (high velocity, short holding time, zero discretionary spending).
@@ -81,7 +81,7 @@ By cross-referencing **Internal Cash Velocity** (UPI/Bank) against the **Externa
 
 ### 5.3 Identity & Behaviour Shifts
 Detects sudden, statistically improbable shifts in the user's "Digital DNA":
-- **Category Drift**: A jump in the `merchant_category_shift_count` (e.g., sudden high-value spend in categories outside their Peer Cohort's norm).
+- **Category Drift**: A jump in the `merchant_category_shift_count` (e.g., sudden high-value spend in categories outside their personal or Peer Cohort's norm).
 - **Inflation of Discretionary Ratio**: Identifying "Lifestyle Creep" that signals a baseline shift in business sustainability.
 
 ---

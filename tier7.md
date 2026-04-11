@@ -17,11 +17,11 @@ The engine follows a four-stage pipeline for every credit inquiry:
 
 ## 2. Model Architecture & Training Strategy
 
-The engine utilizes **XGBoost (Histogram Method)** trained on 46 distinct MSME features, validated against a noisy proxy label generator that simulates default risk.
+The engine utilizes **XGBoost (Histogram Method)** trained on 46 distinct individual and MSME features, validated against a noisy proxy label generator that simulates default risk.
 
 ### 2.1 Dual-Model Deployment
-- **`xgb_credit` (Full Data)**: Used for comprehensive underwriting including GST, E-Way Bills (EWB), and Banking history.
-- **`xgb_credit_upi_heavy` (No GST)**: A specialized model for thin-file micro-enterprises, relying exclusively on UPI velocity and behavioral patterns.
+- **`xgb_credit` (Full Data)**: Used for comprehensive underwriting including Salary/GST, E-Way Bills (EWB), and Banking history.
+- **`xgb_credit_upi_heavy` (No GST)**: A specialized model for individuals and thin-file micro-enterprises, relying exclusively on UPI velocity and behavioral patterns.
 
 ---
 
@@ -80,9 +80,9 @@ The dynamic limit adjustment is implemented as a **Temporal State Refresh**:
 
 The Cognitive Credit Engine is designed to align with the latest RBI mandates for MSME lending and the academic state-of-the-art in explainable machine learning.
 
-### 8.1 MSE Lending Policy (Feb 2026 Update)
-FinTwin aligns its credit sizing logic with the **RBI “Lending to Micro, Small & Medium Enterprises (MSME) Sector (Amendment) Directions, 2026”** (issued February 9, 2026).
-- **Collateral-Free Ceiling**: The engine supports collateral-free lending limits of up to **₹20 lakh** for MSEs, ensuring compliant priority sector lending (PSL) eligibility.
+### 8.1 Individual & MSE Lending Policy (Feb 2026 Update)
+FinTwin aligns its credit sizing logic with the **RBI “Lending to Micro, Small & Medium Enterprises (MSME) Sector (Amendment) Directions, 2026”** (issued February 9, 2026) and corresponding digital lending guidelines for individuals.
+- **Collateral-Free Ceiling**: The engine supports collateral-free lending limits of up to **₹20 lakh** for individuals and MSEs, ensuring compliant priority sector lending (PSL) eligibility.
 - **Reference**: [RBI Master Directions – Lending to MSME Sector](https://www.rbi.org.in) | [Drishti IAS Summary](https://www.drishtiias.com/daily-updates/daily-news-analysis/rbi-enhances-collateral-free-lending-for-mses)
 
 ### 8.2 Foundation Research Papers
