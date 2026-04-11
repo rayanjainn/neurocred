@@ -1,9 +1,11 @@
+
+
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   try {
     const { messages, context } = await req.json();
-    
+
     const systemPrompt = `You are a helpful, expert AI assistant embedded within an MSME credit scoring and fraud analysis platform called HEREhackathon.
 Context about the current focus area or user's data:
 ${context ? JSON.stringify(context, null, 2) : "No context provided."}
@@ -22,21 +24,21 @@ Please answer concisely and accurately.`;
     const maxRetries = 3;
 
     while (retries <= maxRetries) {
-      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      response = await fetch("https://api.featherless.ai/v1/chat/completions", {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          "Authorization": `Bearer ${process.env.FEATHERLESS_API_KEY}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: "google/gemma-3-4b-it:free",
+          model: "deepseek-ai/DeepSeek-V3-0324",
           messages: mappedMessages,
           stream: true
         })
       });
 
       if (response.status === 429) {
-        console.warn(`OpenRouter 429 Too Many Requests (attempt ${retries + 1}). Waiting to retry...`);
+        console.warn(`Featherless 429 Too Many Requests (attempt ${retries + 1}). Waiting to retry...`);
         await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, retries)));
         retries++;
       } else {
@@ -45,7 +47,7 @@ Please answer concisely and accurately.`;
     }
 
     if (!response || !response.ok) {
-      throw new Error(`OpenRouter error: ${response?.status} ${await response?.text()}`);
+      throw new Error(`Featherless error: ${response?.status} ${await response?.text()}`);
     }
 
     const encoder = new TextEncoder();
@@ -58,16 +60,16 @@ Please answer concisely and accurately.`;
           return;
         }
         const reader = response.body.getReader();
-        
+
         let pending = "";
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          
+
           pending += decoder.decode(value, { stream: true });
           const lines = pending.split("\n");
           pending = lines.pop() || "";
-          
+
           for (const line of lines) {
             const trimmed = line.trim();
             if (trimmed.startsWith("data: ")) {
@@ -95,7 +97,7 @@ Please answer concisely and accurately.`;
       }
     });
   } catch (error: any) {
-    console.error("OpenRouter error:", error);
+    console.error("Featherless error:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
