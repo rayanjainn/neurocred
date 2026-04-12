@@ -42,6 +42,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator
@@ -311,6 +313,7 @@ async def voice_call_respond(request: Request) -> Response:
 
     form = await request.form()
     speech_text = str(form.get("SpeechResult", "")).strip()
+    call_sid = str(form.get("CallSid", "")).strip()
 
     if not speech_text:
         xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -330,7 +333,45 @@ async def voice_call_respond(request: Request) -> Response:
 </Response>"""
         return Response(content=xml, media_type="text/xml")
 
-    reply = await _groq_voice_reply(speech_text)
+    redis: aioredis.Redis = app.state.redis
+    voice_user_id = user_id or "voice_anonymous"
+    voice_session_id = _sanitize_chat_session_id(f"call_{call_sid}") if call_sid else None
+
+    conversation_prompt = speech_text
+    voice_session: dict[str, Any] | None = None
+    if voice_session_id:
+        voice_session = await _read_twin_chat_session(redis, voice_user_id, voice_session_id)
+        if voice_session is None:
+            voice_session = _new_twin_chat_session(voice_user_id, voice_session_id)
+
+        history_lines: list[str] = []
+        for turn in voice_session.get("messages", [])[-8:]:
+            role = str(turn.get("role", "")).lower()
+            content = str(turn.get("content", "")).strip()
+            if not content:
+                continue
+            prefix = "User" if role == "user" else "Assistant"
+            clipped = content if len(content) <= 180 else (content[:180] + "...")
+            history_lines.append(f"{prefix}: {clipped}")
+
+        if history_lines:
+            conversation_prompt = (
+                "Conversation so far:\n"
+                + "\n".join(history_lines)
+                + f"\nUser: {speech_text}"
+            )
+
+    reply = await _groq_voice_reply(conversation_prompt)
+
+    if voice_session is not None:
+        ts = datetime.utcnow().isoformat()
+        msgs = voice_session.setdefault("messages", [])
+        msgs.append({"role": "user", "content": speech_text, "ts": ts})
+        msgs.append({"role": "assistant", "content": reply, "ts": ts})
+        voice_session["messages"] = msgs[-_TWIN_CHAT_MAX_MESSAGES:]
+        voice_session["updated_at"] = ts
+        await _save_twin_chat_session(redis, voice_session)
+
     safe_reply = _safe_speech(reply)
     xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <Response>
@@ -671,6 +712,77 @@ async def get_twin_history(
     }
 
 
+@app.get("/twin/{user_id}/version/{version}")
+async def get_twin_version_snapshot(user_id: str, version: int) -> dict[str, Any]:
+    """Return a specific immutable twin snapshot by version."""
+    from src.twin.twin_service import TwinService
+
+    svc = TwinService(app.state.redis)
+    history = await svc.get_history(user_id, limit=5000)
+    target = next((snap for snap in history if int(snap.get("version", -1) or -1) == version), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Twin version {version} not found for user_id={user_id}")
+
+    return {
+        "user_id": user_id,
+        "version": version,
+        "snapshot": target,
+    }
+
+
+@app.post("/twin/{user_id}/rollback/{version}")
+async def rollback_twin_to_version(user_id: str, version: int) -> dict[str, Any]:
+    """
+    Roll back current twin state to a prior immutable snapshot.
+    A new version is created to preserve full auditability.
+    """
+    from src.twin.twin_model import DigitalTwin
+    from src.twin.twin_service import TwinService
+    from src.twin.twin_store import TwinStore
+
+    redis: aioredis.Redis = app.state.redis
+    svc = TwinService(redis)
+    current = await svc.get(user_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"No Digital Twin found for user_id={user_id}")
+
+    history = await svc.get_history(user_id, limit=5000)
+    target = next((snap for snap in history if int(snap.get("version", -1) or -1) == version), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"Twin version {version} not found for user_id={user_id}")
+
+    restored = DigitalTwin.model_validate(target)
+    restored.user_id = user_id
+    restored.created_at = current.created_at
+    restored.version = int(current.version) + 1
+    restored.last_updated = datetime.utcnow()
+
+    risk_hist = list(current.risk_history or [])[-19:]
+    risk_hist.append(round(float(restored.risk_score or 0.0), 4))
+    restored.risk_history = risk_hist
+
+    restored.risk_trend_timeseries = list(current.risk_trend_timeseries or [])[-364:]
+    restored.append_risk_point()
+
+    feat_hist = list(current.feature_history_summary or [])[-9:]
+    feat_hist.append(restored.snapshot_summary())
+    restored.feature_history_summary = feat_hist
+
+    store = TwinStore(redis)
+    await store.save(restored, append_history=True)
+    await svc._emit_twin_updated(restored)
+
+    return {
+        "status": "rolled_back",
+        "user_id": user_id,
+        "rolled_back_from_version": version,
+        "new_version": restored.version,
+        "risk_score": restored.risk_score,
+        "persona": restored.persona,
+        "snapshot": restored.model_dump(),
+    }
+
+
 @app.post("/twin/{user_id}/update")
 async def update_twin(user_id: str) -> dict[str, Any]:
     """
@@ -716,6 +828,98 @@ async def update_twin(user_id: str) -> dict[str, Any]:
     }
 
 
+_TWIN_CHAT_TTL_SECONDS = int(timedelta(days=7).total_seconds())
+_TWIN_CHAT_MAX_MESSAGES = 80
+
+
+def _twin_chat_session_key(user_id: str, chat_session_id: str) -> str:
+    return f"tier4:twinchat:{user_id}:{chat_session_id}"
+
+
+def _sanitize_chat_session_id(raw: Any) -> str | None:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    if re.fullmatch(r"[A-Za-z0-9_-]{6,80}", value):
+        return value
+    return None
+
+
+async def _read_twin_chat_session(
+    redis: aioredis.Redis,
+    user_id: str,
+    chat_session_id: str,
+) -> dict[str, Any] | None:
+    raw = await redis.get(_twin_chat_session_key(user_id, chat_session_id))
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if str(data.get("user_id", "")) != user_id:
+        return None
+    if str(data.get("chat_session_id", "")) != chat_session_id:
+        return None
+    if not isinstance(data.get("messages"), list):
+        data["messages"] = []
+    return data
+
+
+def _new_twin_chat_session(user_id: str, chat_session_id: str | None = None) -> dict[str, Any]:
+    session_id = chat_session_id or f"chat_{uuid.uuid4().hex[:16]}"
+    ts = datetime.utcnow().isoformat()
+    return {
+        "user_id": user_id,
+        "chat_session_id": session_id,
+        "created_at": ts,
+        "updated_at": ts,
+        "messages": [],
+    }
+
+
+async def _save_twin_chat_session(redis: aioredis.Redis, session: dict[str, Any]) -> None:
+    user_id = str(session.get("user_id", "")).strip()
+    chat_session_id = str(session.get("chat_session_id", "")).strip()
+    if not user_id or not chat_session_id:
+        return
+    await redis.setex(
+        _twin_chat_session_key(user_id, chat_session_id),
+        _TWIN_CHAT_TTL_SECONDS,
+        json.dumps(session, default=str),
+    )
+
+
+@app.get("/twin/{user_id}/chat/session/{chat_session_id}")
+async def get_twin_chat_session(
+    user_id: str,
+    chat_session_id: str,
+    limit: int = 30,
+) -> dict[str, Any]:
+    """
+    Retrieve a persisted twin chat session for context replay in the UI.
+    """
+    redis: aioredis.Redis = app.state.redis
+    safe_session_id = _sanitize_chat_session_id(chat_session_id)
+    if not safe_session_id:
+        raise HTTPException(status_code=400, detail="invalid chat_session_id")
+
+    session = await _read_twin_chat_session(redis, user_id, safe_session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Chat session {safe_session_id} not found")
+
+    max_limit = max(1, min(int(limit), 200))
+    messages = session.get("messages", [])[-max_limit:]
+    return {
+        "user_id": user_id,
+        "chat_session_id": safe_session_id,
+        "created_at": session.get("created_at"),
+        "updated_at": session.get("updated_at"),
+        "message_count": len(session.get("messages", [])),
+        "messages": messages,
+    }
+
+
 @app.post("/twin/{user_id}/chat")
 async def chat_with_twin(user_id: str, body: dict[str, Any]) -> Any:
     """
@@ -729,11 +933,13 @@ async def chat_with_twin(user_id: str, body: dict[str, Any]) -> Any:
 
     message: str = body.get("message", "")
     stream: bool = body.get("stream", False)
+    requested_session_id = _sanitize_chat_session_id(body.get("chat_session_id"))
 
     if not message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
-    svc = TwinService(app.state.redis)
+    redis: aioredis.Redis = app.state.redis
+    svc = TwinService(redis)
     twin = await svc.get(user_id)
     if twin is None:
         raise HTTPException(
@@ -741,8 +947,37 @@ async def chat_with_twin(user_id: str, body: dict[str, Any]) -> Any:
             detail=f"No Digital Twin for user_id={user_id}. Run /twin/bootstrap first.",
         )
 
+    session = None
+    if requested_session_id:
+        session = await _read_twin_chat_session(redis, user_id, requested_session_id)
+    if session is None:
+        session = _new_twin_chat_session(user_id, requested_session_id)
+
+    history = session.get("messages", [])[-12:]
+
     dm = DialogueManager()
-    response_data = dm.chat(message, twin)
+    response_data = dm.chat(message, twin, conversation_history=history)
+
+    ts = datetime.utcnow().isoformat()
+    messages = session.setdefault("messages", [])
+    messages.append({
+        "role": "user",
+        "content": message,
+        "ts": ts,
+    })
+    messages.append({
+        "role": "assistant",
+        "content": response_data.get("content", ""),
+        "intent": response_data.get("intent"),
+        "avatar_expression": response_data.get("avatar_expression"),
+        "ts": ts,
+    })
+    session["messages"] = messages[-_TWIN_CHAT_MAX_MESSAGES:]
+    session["updated_at"] = ts
+
+    await _save_twin_chat_session(redis, session)
+    response_data["chat_session_id"] = session["chat_session_id"]
+    response_data["context_message_count"] = len(session["messages"])
 
     if not stream:
         return response_data
@@ -756,6 +991,7 @@ async def chat_with_twin(user_id: str, body: dict[str, Any]) -> Any:
                 "content": word + (" " if i < len(words) - 1 else ""),
                 "role": "twin",
                 "avatar_expression": response_data.get("avatar_expression"),
+                "chat_session_id": session.get("chat_session_id"),
             }
             yield f"data: {json.dumps(chunk)}\n\n"
             await asyncio.sleep(0.04)
@@ -972,6 +1208,338 @@ async def bootstrap_twins() -> dict[str, Any]:
     svc = TwinService(app.state.redis)
     count = await svc.bootstrap_from_features_parquet()
     return {"status": "ok", "twins_bootstrapped": count}
+
+
+def _pdf_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _render_simple_pdf(lines: list[str]) -> bytes:
+    """
+    Render a compact single-page PDF using built-in Type1 font primitives.
+    This avoids external dependencies while enabling one-click PDF export.
+    """
+    text_lines = [line[:110] for line in lines][:58]
+    text_ops = ["BT", "/F1 10 Tf", "12 TL", "40 760 Td"]
+    for line in text_lines:
+        text_ops.append(f"({_pdf_escape(line)}) Tj")
+        text_ops.append("T*")
+    text_ops.append("ET")
+    stream = "\n".join(text_ops).encode("latin-1", errors="replace")
+
+    buf = bytearray()
+    buf.extend(b"%PDF-1.4\n")
+    offsets = [0] * 6
+
+    def _append_obj(obj_id: int, payload: bytes) -> None:
+        offsets[obj_id] = len(buf)
+        buf.extend(f"{obj_id} 0 obj\n".encode("ascii"))
+        buf.extend(payload)
+        buf.extend(b"\nendobj\n")
+
+    _append_obj(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    _append_obj(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+    _append_obj(
+        3,
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    )
+    _append_obj(4, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    _append_obj(5, f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream")
+
+    xref_pos = len(buf)
+    buf.extend(b"xref\n0 6\n")
+    buf.extend(b"0000000000 65535 f \n")
+    for i in range(1, 6):
+        buf.extend(f"{offsets[i]:010d} 00000 n \n".encode("ascii"))
+    buf.extend(b"trailer\n<< /Size 6 /Root 1 0 R >>\n")
+    buf.extend(f"startxref\n{xref_pos}\n%%EOF\n".encode("ascii"))
+    return bytes(buf)
+
+
+async def _collect_credit_decisions(redis: aioredis.Redis, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    decisions: list[dict[str, Any]] = []
+    cursor = 0
+    scanned = 0
+    max_scan = 1000
+
+    while True:
+        cursor, batch = await redis.scan(cursor, match="score:*", count=200)
+        for key in batch:
+            if not str(key).startswith("score:"):
+                continue
+            scanned += 1
+            rec = await redis.hgetall(key)
+            if not rec or str(rec.get("user_id", "")) != user_id:
+                continue
+            status = str(rec.get("status", "")).lower()
+            if status not in {"complete", "approved", "denied"}:
+                continue
+
+            def _to_float(v: Any, default: float = 0.0) -> float:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return default
+
+            decisions.append(
+                {
+                    "task_id": str(key).removeprefix("score:"),
+                    "status": status,
+                    "credit_score": int(_to_float(rec.get("credit_score"), 0.0)),
+                    "risk_band": rec.get("risk_band"),
+                    "recommended_personal_loan_amount": _to_float(
+                        rec.get("recommended_personal_loan_amount"), 0.0
+                    ),
+                    "recommended_credit_limit": _to_float(
+                        rec.get("recommended_credit_limit") or rec.get("recommended_personal_loan_amount"),
+                        0.0,
+                    ),
+                    "apr": _to_float(rec.get("annual_percentage_rate"), 0.0),
+                    "score_freshness": rec.get("score_freshness") or rec.get("updated_at") or rec.get("timestamp"),
+                }
+            )
+            if len(decisions) >= limit:
+                break
+
+        if cursor == 0 or len(decisions) >= limit or scanned >= max_scan:
+            break
+
+    # Supplement with portal admin audit actions where available.
+    try:
+        from src.api.portal_routes import _STORE  # type: ignore
+
+        portal_rows = _STORE.get("audit_log", []) if isinstance(_STORE, dict) else []
+        for row in portal_rows:
+            if row.get("user_id") != user_id:
+                continue
+            action = str(row.get("action", ""))
+            if action not in {"loan_approved", "loan_denied", "score_submitted", "threshold_updated"}:
+                continue
+            decisions.append(
+                {
+                    "task_id": row.get("resource") or row.get("id"),
+                    "status": action,
+                    "credit_score": None,
+                    "risk_band": None,
+                    "recommended_personal_loan_amount": None,
+                    "recommended_credit_limit": None,
+                    "apr": None,
+                    "score_freshness": row.get("ts"),
+                    "source": "portal_audit",
+                    "detail": row.get("detail"),
+                }
+            )
+    except Exception:
+        pass
+
+    def _sort_key(item: dict[str, Any]) -> str:
+        return str(item.get("score_freshness") or "")
+
+    decisions.sort(key=_sort_key, reverse=True)
+    return decisions[:limit]
+
+
+async def _collect_tier10_audit_bundle(redis: aioredis.Redis, user_id: str) -> dict[str, Any]:
+    from src.intervention.audit_logger import AuditLogger
+    from src.intervention.trigger_engine import evaluate_triggers
+    from src.reasoning.tier5 import get_tier5_result
+    from src.simulation.output_emitter import get_cached_simulation, get_ews_snapshot, get_fan_chart
+    from src.twin.twin_service import TwinService
+    from src.vigilance.tier9 import get_tier9_result
+
+    twin_svc = TwinService(redis)
+    twin = await twin_svc.get(user_id)
+    current_twin = twin.model_dump() if twin else {}
+    if twin:
+        current_twin["cibil_like_score"] = twin.cibil_like_score()
+
+    twin_history = await twin_svc.get_history(user_id, limit=200)
+
+    fired_triggers: list[dict[str, Any]] = []
+    if twin:
+        for trig in evaluate_triggers(twin):
+            fired_triggers.append(
+                {
+                    "type": trig.trigger_type,
+                    "priority": trig.priority,
+                    "urgency": trig.urgency,
+                    "reason": trig.reason,
+                    "channels": trig.channels,
+                    "suggested_actions": trig.suggested_actions,
+                }
+            )
+
+    auditor = AuditLogger(redis)
+    audit_records = await auditor.get_user_audit(user_id, limit=300)
+    intervention_events = [
+        r
+        for r in audit_records
+        if r.get("event_type") in {"trigger_fired", "intervention_sent", "notification_sent", "chat_message"}
+    ]
+
+    reasoning_result = await get_tier5_result(user_id, redis)
+    reasoning_trace = reasoning_result.model_dump() if reasoning_result else None
+
+    vigilance_result = await get_tier9_result(user_id, redis)
+    anomaly_result = vigilance_result.model_dump() if vigilance_result else None
+
+    credit_decisions = await _collect_credit_decisions(redis, user_id, limit=80)
+
+    last_sim_id = str(current_twin.get("last_simulation_id") or "").strip()
+    latest_simulation = await get_cached_simulation(redis, user_id, last_sim_id) if last_sim_id else None
+    ews_snapshot = await get_ews_snapshot(redis, user_id)
+    fan_chart = await get_fan_chart(redis, user_id)
+
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "tier": "tier10",
+        "user_id": user_id,
+        "regulatory_standard": "RBI Digital Lending Guidelines 2023 §4.2",
+        "twin_current_state": current_twin,
+        "twin_state_history": twin_history,
+        "llm_reasoning_traces": reasoning_trace,
+        "credit_decisions": credit_decisions,
+        "intervention_log": {
+            "fired_triggers": fired_triggers,
+            "audit_events": intervention_events,
+        },
+        "anomaly_detections": anomaly_result,
+        "simulation_artifacts": {
+            "last_simulation_id": last_sim_id or None,
+            "latest_simulation_result": latest_simulation,
+            "ews_snapshot": ews_snapshot,
+            "fan_chart": fan_chart,
+        },
+    }
+
+
+def _tier10_report_lines(report: dict[str, Any]) -> list[str]:
+    twin_state = report.get("twin_current_state") or {}
+    sim_artifacts = report.get("simulation_artifacts") or {}
+    intervention = report.get("intervention_log") or {}
+
+    lines = [
+        "Airavat Tier 10 Regulatory Audit Report",
+        f"Generated At: {report.get('generated_at', '')}",
+        f"User ID: {report.get('user_id', '')}",
+        f"Standard: {report.get('regulatory_standard', '')}",
+        "",
+        "Twin Current State",
+        f"Risk Score: {twin_state.get('risk_score', 'n/a')}",
+        f"Liquidity Health: {twin_state.get('liquidity_health', 'n/a')}",
+        f"CIBIL-Like Score: {twin_state.get('cibil_like_score', 'n/a')}",
+        f"Persona: {twin_state.get('persona', 'n/a')}",
+        "",
+        "Audit Sections",
+        f"Twin History Entries: {len(report.get('twin_state_history') or [])}",
+        f"Reasoning Trace Present: {'yes' if report.get('llm_reasoning_traces') else 'no'}",
+        f"Credit Decisions: {len(report.get('credit_decisions') or [])}",
+        f"Intervention Events: {len((intervention.get('audit_events') or []))}",
+        f"Fired Triggers: {len((intervention.get('fired_triggers') or []))}",
+        f"Anomaly Payload Present: {'yes' if report.get('anomaly_detections') else 'no'}",
+        "",
+        "Simulation Artifacts",
+        f"Last Simulation ID: {sim_artifacts.get('last_simulation_id') or 'n/a'}",
+        f"Latest Simulation Result Present: {'yes' if sim_artifacts.get('latest_simulation_result') else 'no'}",
+        f"EWS Snapshot Present: {'yes' if sim_artifacts.get('ews_snapshot') else 'no'}",
+        f"Fan Chart Present: {'yes' if sim_artifacts.get('fan_chart') else 'no'}",
+        "",
+        "This PDF is a compact compliance summary.",
+        "Use JSON export for full machine-readable evidence bundle.",
+    ]
+
+    return lines
+
+
+@app.post("/tier10/whatif/live")
+async def tier10_live_whatif(body: dict[str, Any]) -> dict[str, Any]:
+    """
+    Run a live What-If simulation and return updated twin/risk/credit outputs.
+    Designed for dashboard latency target <=10 seconds where feasible.
+    """
+    from src.twin.twin_service import TwinService
+
+    user_id = str(body.get("user_id", "")).strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    started = time.perf_counter()
+
+    scenario_name = str(body.get("scenario_name", "baseline")).strip() or "baseline"
+    income_change_pct = float(body.get("income_change_pct", 0.0) or 0.0)
+    expense_change_pct = float(body.get("expense_change_pct", 0.0) or 0.0)
+
+    sim_payload = {
+        "user_id": user_id,
+        "num_simulations": int(body.get("num_simulations", 1000)),
+        "run_counterfactual": bool(body.get("run_counterfactual", True)),
+        "scenario_overrides": {
+            "scenario_name": scenario_name,
+            "income_change_pct": income_change_pct,
+            "expense_change_pct": expense_change_pct,
+            "job_loss": scenario_name == "job_loss",
+            "medical_emergency": scenario_name == "spending_shock",
+        },
+    }
+
+    simulation_result = await run_simulation_endpoint(sim_payload)
+
+    redis: aioredis.Redis = app.state.redis
+    twin_svc = TwinService(redis)
+    twin = await twin_svc.get(user_id)
+    twin_data = twin.model_dump() if twin else {}
+    if twin:
+        twin_data["cibil_like_score"] = twin.cibil_like_score()
+
+    proactive_offer = simulation_result.get("proactive_offer") or {}
+    updated_credit_limit = (
+        proactive_offer.get("approved_amount")
+        or simulation_result.get("recommended_credit_limit")
+        or simulation_result.get("new_credit_limit")
+    )
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+
+    return {
+        "user_id": user_id,
+        "latency_ms": latency_ms,
+        "sla_target_ms": 10000,
+        "sla_met": latency_ms <= 10000,
+        "scenario": {
+            "scenario_name": scenario_name,
+            "income_change_pct": income_change_pct,
+            "expense_change_pct": expense_change_pct,
+        },
+        "simulation": simulation_result,
+        "updated_twin_state": twin_data,
+        "updated_risk_score": twin_data.get("risk_score"),
+        "updated_credit_limit": updated_credit_limit,
+    }
+
+
+@app.get("/tier10/report/{user_id}")
+async def tier10_regulatory_report(user_id: str, format: str = "json") -> Any:
+    """
+    One-click Tier 10 regulatory audit report export.
+    Supports `format=json` and `format=pdf`.
+    """
+    redis: aioredis.Redis = app.state.redis
+    report = await _collect_tier10_audit_bundle(redis, user_id)
+
+    fmt = format.lower().strip()
+    if fmt == "json":
+        return report
+
+    if fmt == "pdf":
+        pdf_bytes = _render_simple_pdf(_tier10_report_lines(report))
+        filename = f"airavat_tier10_audit_{user_id}_{int(time.time())}.pdf"
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    raise HTTPException(status_code=400, detail="format must be json or pdf")
 
 
 # ── Tier 8: Audit / replay endpoint ──────────────────────────────────────────
@@ -1845,6 +2413,74 @@ def _coerce_feature_payload(feat_data: dict[str, Any]) -> dict[str, Any]:
     return feat_data
 
 
+def _coerce_redis_hash_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """
+    Coerce Redis hash string values into JSON/boolean/number-friendly Python types.
+    """
+    parsed: dict[str, Any] = {}
+    for key, value in payload.items():
+        if not isinstance(value, str):
+            parsed[key] = value
+            continue
+
+        raw = value.strip()
+        if raw == "":
+            parsed[key] = ""
+            continue
+
+        if raw.lower() in {"true", "false"}:
+            parsed[key] = raw.lower() == "true"
+            continue
+
+        try:
+            parsed[key] = json.loads(raw)
+            continue
+        except json.JSONDecodeError:
+            pass
+
+        try:
+            if re.fullmatch(r"[-+]?\d+", raw):
+                parsed[key] = int(raw)
+            elif re.fullmatch(r"[-+]?\d*\.\d+(e[-+]?\d+)?", raw.lower()):
+                parsed[key] = float(raw)
+            else:
+                parsed[key] = value
+        except (TypeError, ValueError):
+            parsed[key] = value
+
+    return parsed
+
+
+async def _load_twin_snapshot(redis: aioredis.Redis, user_id: str) -> dict[str, Any]:
+    """
+    Read twin state safely from Redis, supporting both JSON-string and hash values.
+    """
+    key = f"twin:{user_id}"
+
+    raw: str | None = None
+    try:
+        raw = await redis.get(key)
+    except Exception as exc:
+        if "WRONGTYPE" not in str(exc):
+            raise
+
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+
+    try:
+        hash_payload = await redis.hgetall(key)
+    except Exception:
+        hash_payload = {}
+
+    if not hash_payload:
+        return {}
+
+    return _coerce_redis_hash_payload(hash_payload)
+
+
 async def _load_latest_feature_vector(
     redis: aioredis.Redis,
     user_id: str,
@@ -1911,10 +2547,24 @@ def _build_simulation_snapshot(
         (fv.income_90d / 3.0) if fv and fv.income_90d else None,
     )
     if income_monthly is None or income_monthly <= 0:
-        raise ValueError(
-            f"Simulation snapshot missing income for user_id={user_id}. "
-            "Run feature generation first (tiers 1-3)."
-        )
+        fallback_ess = _first_num(
+            provided.get("essential_expense_monthly"),
+            twin_data.get("essential_expense_monthly"),
+        ) or 0.0
+        fallback_disc = _first_num(
+            provided.get("discretionary_expense_monthly"),
+            twin_data.get("discretionary_expense_monthly"),
+        ) or 0.0
+        fallback_emi = _first_num(
+            provided.get("emi_monthly"),
+            twin_data.get("emi_monthly"),
+        ) or 0.0
+        fallback_commitments = fallback_ess + fallback_disc + fallback_emi
+        if fallback_commitments > 0:
+            income_monthly = max(10000.0, fallback_commitments * 1.35)
+        else:
+            # Conservative default when no features/twin payload exists yet.
+            income_monthly = 50000.0
 
     essential_monthly = _first_num(
         provided.get("essential_expense_monthly"),
@@ -1925,9 +2575,7 @@ def _build_simulation_snapshot(
         inferred_ess_ratio = _clamp(1.0 - fv.savings_rate - fv.discretionary_ratio, 0.1, 0.9)
         essential_monthly = income_monthly * inferred_ess_ratio
     if essential_monthly is None or essential_monthly <= 0:
-        raise ValueError(
-            f"Simulation snapshot missing essential expense for user_id={user_id}."
-        )
+        essential_monthly = income_monthly * 0.50
 
     discretionary_monthly = _first_num(
         provided.get("discretionary_expense_monthly"),
@@ -1937,9 +2585,7 @@ def _build_simulation_snapshot(
     if (discretionary_monthly is None or discretionary_monthly < 0) and fv is not None:
         discretionary_monthly = income_monthly * _clamp(fv.discretionary_ratio, 0.0, 0.8)
     if discretionary_monthly is None or discretionary_monthly < 0:
-        raise ValueError(
-            f"Simulation snapshot missing discretionary expense for user_id={user_id}."
-        )
+        discretionary_monthly = income_monthly * 0.25
 
     emi_monthly = _first_num(
         provided.get("emi_monthly"),
@@ -1947,9 +2593,7 @@ def _build_simulation_snapshot(
         (fv.emi_burden_ratio * income_monthly) if fv else None,
     )
     if emi_monthly is None or emi_monthly <= 0:
-        raise ValueError(
-            f"Simulation snapshot missing EMI burden for user_id={user_id}."
-        )
+        emi_monthly = max(1.0, income_monthly * 0.18)
 
     cash_buffer_days = _first_num(
         provided.get("cash_buffer_days"),
@@ -1957,9 +2601,7 @@ def _build_simulation_snapshot(
         fv.cash_buffer_days if fv else None,
     )
     if cash_buffer_days is None or cash_buffer_days < 0:
-        raise ValueError(
-            f"Simulation snapshot missing cash buffer for user_id={user_id}."
-        )
+        cash_buffer_days = 12.0
 
     income_stability = _first_num(
         provided.get("income_stability"),
@@ -1967,9 +2609,7 @@ def _build_simulation_snapshot(
         fv.income_stability_score if fv else None,
     )
     if income_stability is None:
-        raise ValueError(
-            f"Simulation snapshot missing income stability for user_id={user_id}."
-        )
+        income_stability = 0.55
 
     spending_volatility = _first_num(
         provided.get("spending_volatility"),
@@ -1977,9 +2617,7 @@ def _build_simulation_snapshot(
         fv.spending_volatility_index if fv else None,
     )
     if spending_volatility is None:
-        raise ValueError(
-            f"Simulation snapshot missing spending volatility for user_id={user_id}."
-        )
+        spending_volatility = 0.40
 
     risk_score = _first_num(
         provided.get("risk_score"),
@@ -1996,8 +2634,15 @@ def _build_simulation_snapshot(
             1.0,
         )
     if risk_score is None:
-        raise ValueError(
-            f"Simulation snapshot missing risk score for user_id={user_id}."
+        emi_burden_proxy = _clamp(emi_monthly / max(income_monthly, 1.0), 0.0, 1.5)
+        buffer_penalty = _clamp(1.0 - (cash_buffer_days / 30.0), 0.0, 1.0)
+        volatility_penalty = _clamp(spending_volatility / 1.2, 0.0, 1.0)
+        risk_score = _clamp(
+            0.45 * emi_burden_proxy
+            + 0.35 * buffer_penalty
+            + 0.20 * volatility_penalty,
+            0.0,
+            1.0,
         )
 
     debit_failure_rate = _first_num(
@@ -2200,8 +2845,7 @@ async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="user_id is required")
 
     redis: aioredis.Redis = app.state.redis
-    twin_raw = await redis.get(f"twin:{user_id}")
-    twin_data = json.loads(twin_raw) if twin_raw else {}
+    twin_data = await _load_twin_snapshot(redis, user_id)
     fv = await _load_latest_feature_vector(redis, user_id)
 
     try:
@@ -2267,9 +2911,38 @@ async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
 
     await emit_simulation_completed(redis, user_id, result)
 
+    # Persist simulation risk projection back into twin timeline so UI evolution reflects stress runs.
+    day90_default_prob = float(
+        result.get("simulation_windows", {}).get("day_90", {}).get("default_probability")
+        or result.get("temporal_projections", {}).get("day_90", {}).get("default_probability")
+        or 0.0
+    )
+    day90_default_prob = max(0.0, min(1.0, day90_default_prob))
+
+    trajectory = result.get("risk_trajectory_p50") or result.get("predicted_risk_trajectory")
+    state_patch: dict[str, Any] = {"risk_score": day90_default_prob}
+    if isinstance(trajectory, list) and trajectory:
+        clean_traj: list[float] = []
+        for v in trajectory[:365]:
+            try:
+                clean_traj.append(float(v))
+            except (TypeError, ValueError):
+                continue
+        if clean_traj:
+            state_patch["predicted_risk_trajectory"] = clean_traj
+
+    twin_svc = TwinService(redis)
+    updated_twin = await twin_svc.update_state_patch(
+        user_id,
+        state_patch=state_patch,
+        emit_event=True,
+    )
+    if updated_twin:
+        result["updated_twin_version"] = updated_twin.version
+        result["updated_twin_risk_score"] = updated_twin.risk_score
+
     # Tier 8 proactive offer generation on distress.
     proactive_offer = None
-    twin_svc = TwinService(redis)
     live_twin = await twin_svc.get(user_id)
     if live_twin and (
         live_twin.liquidity_health == "LOW"

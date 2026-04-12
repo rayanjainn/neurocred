@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import json
 import os
+import logging
 from datetime import datetime
 from typing import Optional
 
 import redis.asyncio as aioredis
+from pydantic import ValidationError
 
 from src.twin.twin_model import DigitalTwin
 
@@ -58,25 +60,93 @@ class TwinStore:
 
     # ── read ──────────────────────────────────────────────────────────────────
 
-    async def get(self, user_id: str) -> Optional[DigitalTwin]:
+    @staticmethod
+    def _coerce_hash_payload(payload: dict[str, str]) -> dict:
+        parsed: dict = {}
+        for key, value in payload.items():
+            raw = (value or "").strip()
+            if raw == "":
+                parsed[key] = ""
+                continue
+            if raw.lower() in {"true", "false"}:
+                parsed[key] = raw.lower() == "true"
+                continue
+            try:
+                parsed[key] = json.loads(raw)
+                continue
+            except json.JSONDecodeError:
+                pass
+            try:
+                if raw.isdigit() or (raw.startswith("-") and raw[1:].isdigit()):
+                    parsed[key] = int(raw)
+                else:
+                    parsed[key] = float(raw)
+            except (TypeError, ValueError):
+                parsed[key] = value
+        return parsed
+
+    async def _recover_from_hash(self, user_id: str) -> Optional[DigitalTwin]:
+        key = _TWIN_KEY.format(uid=user_id)
         try:
-            raw = await self._r.get(_TWIN_KEY.format(uid=user_id))
+            hash_payload = await self._r.hgetall(key)
+        except Exception:
+            hash_payload = {}
+        if not hash_payload:
+            return None
+
+        payload = self._coerce_hash_payload(hash_payload)
+        payload.setdefault("user_id", user_id)
+        try:
+            twin = DigitalTwin.model_validate(payload)
+        except ValidationError:
+            return None
+
+        # Normalize recovered shape into canonical JSON twin record.
+        await self._r.set(key, twin.model_dump_json())
+        return twin
+
+    async def get(self, user_id: str) -> Optional[DigitalTwin]:
+        key = _TWIN_KEY.format(uid=user_id)
+        try:
+            raw = await self._r.get(key)
         except Exception as exc:
             if "WRONGTYPE" in str(exc):
-                # Stale key with wrong Redis type — delete and return None
-                import logging
                 logging.getLogger(__name__).warning(
-                    "[twin-store] WRONGTYPE on twin:%s — deleting stale key and rebuilding", user_id
+                    "[twin-store] WRONGTYPE on twin:%s — attempting hash recovery", user_id
                 )
+                recovered = await self._recover_from_hash(user_id)
+                if recovered is not None:
+                    return recovered
+                # Unrecoverable stale key.
                 try:
-                    await self._r.delete(_TWIN_KEY.format(uid=user_id))
+                    await self._r.delete(key)
                 except Exception:
                     pass
                 return None
             raise
         if not raw:
             return None
-        return DigitalTwin.model_validate_json(raw)
+
+        try:
+            return DigitalTwin.model_validate_json(raw)
+        except ValidationError:
+            # Legacy records may miss required fields like user_id.
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(payload, dict):
+                return None
+
+            payload.setdefault("user_id", user_id)
+            try:
+                twin = DigitalTwin.model_validate(payload)
+            except ValidationError:
+                return None
+
+            # Heal storage in-place to avoid repeated recovery path.
+            await self._r.set(key, twin.model_dump_json())
+            return twin
 
     async def get_history(self, user_id: str, limit: int = 20) -> list[dict]:
         """Return up to `limit` historical snapshots (newest first)."""

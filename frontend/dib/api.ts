@@ -975,6 +975,7 @@ export const adminApi = {
     }),
   getApiKeyUsage: (kid: string) => apiFetch<Record<string, unknown>>(`/api-keys/${kid}/usage`),
   getAuditLog: () => apiFetch<unknown[]>("/audit-log"),
+  getTwinUsers: () => apiFetch<Record<string, unknown>>("/twin-users"),
   replayAudit: (body: Record<string, unknown>) =>
     apiFetch<Record<string, unknown>>("/audit/replay", {
       method: "POST",
@@ -995,6 +996,28 @@ export const adminApi = {
     apiFetch<Record<string, unknown>>(`/transactions/${gstin}/ewb-distribution`),
   getReceivablesGap: (gstin: string) =>
     apiFetch<Record<string, unknown>>(`/transactions/${gstin}/receivables-gap`),
+  runTier10LiveWhatIf: (body: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>("/tier10/whatif/live", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  getTier10Report: (userId: string) =>
+    apiFetch<Record<string, unknown>>(`/tier10/report/${userId}?format=json`),
+  downloadTier10ReportPdf: async (userId: string): Promise<Blob> => {
+    const token = getToken();
+    const headers: HeadersInit = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+    const res = await fetch(`${API_BASE}/tier10/report/${userId}?format=pdf`, {
+      method: "GET",
+      headers,
+    });
+    if (!res.ok) {
+      const msg = await res.text().catch(() => "Failed to download Tier 10 PDF report");
+      throw new Error(msg || "Failed to download Tier 10 PDF report");
+    }
+    return await res.blob();
+  },
 };
 
 // Notifications
@@ -1047,7 +1070,13 @@ export const twinApi = {
     body: Record<string, unknown>,
     onChunk: (data: any) => void,
   ) => apiStream(`/twin/${userId}/chat`, body, onChunk),
-  getHistory: (userId: string) => apiFetch<unknown[]>(`/twin/${userId}/history`),
+  getHistory: (userId: string) => apiFetch<Record<string, unknown>>(`/twin/${userId}/history`),
+  getVersionSnapshot: (userId: string, version: number) =>
+    apiFetch<Record<string, unknown>>(`/twin/${userId}/version/${version}`),
+  rollbackToVersion: (userId: string, version: number) =>
+    apiFetch<Record<string, unknown>>(`/twin/${userId}/rollback/${version}`, {
+      method: "POST",
+    }),
   getReport: (userId: string) => apiFetch<Record<string, unknown>>(`/twin/${userId}/report`),
   getTriggers: (userId: string) => apiFetch<unknown[]>(`/twin/${userId}/triggers`),
   getAudit: (userId: string) => apiFetch<unknown[]>(`/twin/${userId}/audit`),

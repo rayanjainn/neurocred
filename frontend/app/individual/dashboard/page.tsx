@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/dib/authContext";
 import { individualApi, vigilanceApi, reasoningApi } from "@/dib/api";
@@ -25,6 +25,15 @@ import {
   BrainCircuit,
   BarChart3,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  CartesianGrid,
+  XAxis,
+  YAxis,
+  Tooltip,
+} from "recharts";
 import { VigilanceReasoningCard } from "@/components/VigilanceReasoningCard";
 
 function formatINR(n: number) {
@@ -71,6 +80,14 @@ function MiniBar({ pct, color }: { pct: number; color: string }) {
       />
     </div>
   );
+}
+
+function fmtTrendLabel(dateStr: string) {
+  const dt = new Date(dateStr);
+  if (Number.isNaN(dt.getTime())) {
+    return dateStr.slice(5);
+  }
+  return dt.toLocaleDateString("en-IN", { month: "short" });
 }
 
 export default function IndividualDashboard() {
@@ -126,6 +143,23 @@ export default function IndividualDashboard() {
   const categories: { category: string; pct: number }[] = score.top_spending_categories ?? [];
   const insights: string[] = score.insights ?? [];
   const history: { date: string; score: number }[] = score.score_history ?? [];
+  const scoreComponents: { id: string; label: string; weight: number; value: number; contribution: number }[] =
+    score.score_components ?? [];
+  const healthExplanation: string =
+    score.health_explanation ?? "Backend score model explanation unavailable.";
+  const scoreFormula: string =
+    score.score_formula ?? "health = weighted blend of backend risk dimensions";
+
+  const historySeries = history.map((h) => ({
+    ...h,
+    label: fmtTrendLabel(h.date),
+  }));
+  const firstScore = historySeries[0]?.score ?? 0;
+  const lastScore = historySeries[historySeries.length - 1]?.score ?? 0;
+  const deltaScore = lastScore - firstScore;
+  const trendState = deltaScore > 1 ? "improving" : deltaScore < -1 ? "declining" : "stable";
+  const maxScore = historySeries.length ? Math.max(...historySeries.map((x) => x.score)) : 0;
+  const minScore = historySeries.length ? Math.min(...historySeries.map((x) => x.score)) : 0;
 
   const CATEGORY_COLORS = ["#6366f1", "#f59e0b", "#22c55e", "#ec4899", "#14b8a6"];
 
@@ -154,8 +188,21 @@ export default function IndividualDashboard() {
             <HealthGauge score={score.financial_health_score ?? 0} />
             <RiskBadge band={score.risk_band ?? "low_risk"} />
             <p className="text-[11px] text-muted-foreground text-center leading-relaxed">
-              Based on UPI patterns, EMI load, savings rate & network signals
+              {healthExplanation}
             </p>
+            <p className="text-[10px] text-muted-foreground text-center font-mono leading-relaxed">
+              {scoreFormula}
+            </p>
+            {scoreComponents.length > 0 && (
+              <div className="w-full pt-1 space-y-1.5">
+                {scoreComponents.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between text-[10px] text-muted-foreground">
+                    <span>{c.label}</span>
+                    <span className="font-mono">+{Number(c.contribution ?? 0).toFixed(1)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -258,39 +305,59 @@ export default function IndividualDashboard() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-4">
-            {history.length > 0 ? (
-              <div className="space-y-2">
-                <div className="flex items-end gap-1.5 h-28">
-                  {history.map((h, i) => {
-                    const max = Math.max(...history.map((x) => x.score));
-                    const min = Math.min(...history.map((x) => x.score));
-                    const range = max - min || 1;
-                    const heightPct = 20 + ((h.score - min) / range) * 70;
-                    const isLast = i === history.length - 1;
-                    return (
-                      <div key={h.date} className="flex-1 flex flex-col items-center gap-1">
-                        <div
-                          className="w-full rounded-t-sm transition-all"
-                          style={{
-                            height: `${heightPct}%`,
-                            backgroundColor: isLast ? "#c8ff00" : "rgba(200,255,0,0.25)",
-                          }}
-                          title={`${h.score}`}
-                        />
-                        <span className="text-[8px] text-muted-foreground font-mono leading-none">
-                          {h.date.slice(5)}
-                        </span>
-                      </div>
-                    );
-                  })}
+            {historySeries.length > 0 ? (
+              <div className="space-y-3">
+                <ResponsiveContainer width="100%" height={150}>
+                  <LineChart data={historySeries} margin={{ top: 5, right: 8, left: -24, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                    <XAxis dataKey="label" tick={{ fontSize: 9 }} />
+                    <YAxis
+                      tick={{ fontSize: 9 }}
+                      domain={[
+                        Math.max(0, minScore - 4),
+                        Math.min(100, maxScore + 4),
+                      ]}
+                    />
+                    <Tooltip
+                      contentStyle={{ fontSize: 11 }}
+                      formatter={(v: number) => [String(v), "Score"]}
+                      labelFormatter={(label) => `Month: ${label}`}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="score"
+                      stroke="#c8ff00"
+                      strokeWidth={2.5}
+                      dot={{ r: 3 }}
+                      activeDot={{ r: 5 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+                <div className="grid grid-cols-3 gap-2 text-[10px]">
+                  <div className="bg-muted/30 rounded px-2 py-1.5 text-muted-foreground">
+                    <p>Min</p>
+                    <p className="font-mono text-foreground">{minScore}</p>
+                  </div>
+                  <div className="bg-muted/30 rounded px-2 py-1.5 text-muted-foreground">
+                    <p>Max</p>
+                    <p className="font-mono text-foreground">{maxScore}</p>
+                  </div>
+                  <div className="bg-muted/30 rounded px-2 py-1.5 text-muted-foreground">
+                    <p>Delta</p>
+                    <p className="font-mono text-foreground">{deltaScore > 0 ? "+" : ""}{deltaScore}</p>
+                  </div>
                 </div>
-                <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-1">
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground pt-0.5">
                   <span>6-month trend</span>
                   <span className={cn(
                     "font-bold",
-                    history[history.length - 1]?.score >= history[0]?.score ? "text-emerald-400" : "text-red-400"
+                    trendState === "improving"
+                      ? "text-emerald-400"
+                      : trendState === "declining"
+                        ? "text-red-400"
+                        : "text-amber-400"
                   )}>
-                    {history[history.length - 1]?.score >= history[0]?.score ? "▲ Improving" : "▼ Declining"}
+                    {trendState === "improving" ? "▲ Improving" : trendState === "declining" ? "▼ Declining" : "■ Stable"}
                   </span>
                 </div>
               </div>

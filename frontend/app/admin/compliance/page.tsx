@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/dib/authContext";
-import { twinApi, simulationApi, reasoningApi, adminApi } from "@/dib/api";
+import { twinApi, simulationApi, reasoningApi, adminApi, vigilanceApi } from "@/dib/api";
 import { PageHeader } from "@/components/shared";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,47 @@ function fmtTs(ts: string) {
   } catch {
     return ts;
   }
+}
+
+function normalizeCotSteps(cot: any): any[] {
+  const direct = cot?.steps ?? cot?.chain_of_thought ?? cot?.cot_trace;
+  if (Array.isArray(direct)) return direct;
+  if (direct && typeof direct === "object") {
+    return Object.entries(direct)
+      .filter(([, val]) => val !== undefined && val !== null)
+      .map(([key, val]) => {
+        const title = String(key).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+        if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
+          return { title, content: String(val) };
+        }
+        if (Array.isArray(val)) {
+          return { title, content: JSON.stringify(val, null, 2) };
+        }
+        return { title, ...(val as Record<string, unknown>), content: JSON.stringify(val, null, 2) };
+      });
+  }
+
+  if (cot && typeof cot === "object") {
+    const derived: any[] = [];
+    if (cot.risk_narrative || cot.narrative) {
+      derived.push({ title: "Narrative", content: String(cot.risk_narrative ?? cot.narrative) });
+    }
+    if (cot.situation) {
+      derived.push({ title: "Situation", content: String(cot.situation) });
+    }
+    if (cot.confidence !== undefined) {
+      derived.push({ title: "Confidence", content: `${Math.round(Number(cot.confidence) * 100)}%` });
+    }
+    if (Array.isArray(cot.active_flags) && cot.active_flags.length > 0) {
+      derived.push({ title: "Concern Flags", content: JSON.stringify(cot.active_flags, null, 2) });
+    }
+    if (Array.isArray(cot.intent_signals) && cot.intent_signals.length > 0) {
+      derived.push({ title: "Intent Signals", content: JSON.stringify(cot.intent_signals, null, 2) });
+    }
+    return derived;
+  }
+
+  return [];
 }
 
 // ─── Twin Timeline Card ──────────────────────────────────────────────────────
@@ -116,13 +157,40 @@ function RiskProjectionGraph({ userId }: { userId: string }) {
       .finally(() => setLoading(false));
   }, [userId]);
 
-  const chartData: any[] = fanData?.fan_chart ?? fanData?.projections ?? [];
-  const formatted = chartData.map((p: any) => ({
-    month: p.month ?? p.t ?? p.period ?? "?",
-    p10: Math.round((p.p10 ?? p.pessimistic ?? 0) * 10) / 10,
-    p50: Math.round((p.p50 ?? p.base ?? 0) * 10) / 10,
-    p90: Math.round((p.p90 ?? p.optimistic ?? 0) * 10) / 10,
-  }));
+  const formatted = (() => {
+    if (Array.isArray(fanData?.fan_chart_series)) {
+      return fanData.fan_chart_series.map((p: any, idx: number) => ({
+        month: p.month ?? `D${idx + 1}`,
+        p10: Number(p.p10 ?? 0),
+        p50: Number(p.p50 ?? 0),
+        p90: Number(p.p90 ?? 0),
+      }));
+    }
+
+    if (fanData?.fan_chart && !Array.isArray(fanData.fan_chart)) {
+      const fan = fanData.fan_chart;
+      const p10: number[] = Array.isArray(fan?.p10) ? fan.p10 : [];
+      const p50: number[] = Array.isArray(fan?.p50) ? fan.p50 : [];
+      const p90: number[] = Array.isArray(fan?.p90) ? fan.p90 : [];
+      const n = Math.min(p10.length, p50.length, p90.length);
+      return Array.from({ length: n }).map((_, idx) => ({
+        month: `D${idx + 1}`,
+        p10: Number(p10[idx] ?? 0),
+        p50: Number(p50[idx] ?? 0),
+        p90: Number(p90[idx] ?? 0),
+      }));
+    }
+
+    const chartData: any[] = Array.isArray(fanData?.fan_chart)
+      ? fanData.fan_chart
+      : (Array.isArray(fanData?.projections) ? fanData.projections : []);
+    return chartData.map((p: any, idx: number) => ({
+      month: p.month ?? p.t ?? p.period ?? `D${idx + 1}`,
+      p10: Number(p.p10 ?? p.pessimistic ?? 0),
+      p50: Number(p.p50 ?? p.base ?? 0),
+      p90: Number(p.p90 ?? p.optimistic ?? 0),
+    }));
+  })();
 
   return (
     <Card className="border-border shadow-sm h-full">
@@ -175,7 +243,12 @@ function InterventionHistory({ userId }: { userId: string }) {
       twinApi.getAudit(userId).catch(() => []),
     ]).then(([t, a]) => {
       setTriggers(Array.isArray(t) ? t : (t as any)?.triggers ?? []);
-      setTwinAudit(Array.isArray(a) ? a : (a as any)?.history ?? []);
+      const records = Array.isArray(a)
+        ? a
+        : (Array.isArray((a as any)?.records)
+          ? (a as any).records
+          : (Array.isArray((a as any)?.history) ? (a as any).history : []));
+      setTwinAudit(records);
     }).finally(() => setLoading(false));
   }, [userId]);
 
@@ -224,8 +297,8 @@ function InterventionHistory({ userId }: { userId: string }) {
             <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
               {twinAudit.slice(0, 8).map((a: any, i: number) => (
                 <div key={i} className="flex items-center justify-between text-xs bg-muted/40 rounded px-2 py-1">
-                  <span className="font-mono text-muted-foreground">{a.event_type ?? "update"}</span>
-                  <span className="text-foreground/70 truncate max-w-[60%]">{a.summary ?? a.description ?? ""}</span>
+                  <span className="font-mono text-muted-foreground">{a.event_type ?? a.action ?? "update"}</span>
+                  <span className="text-foreground/70 truncate max-w-[60%]">{a.summary ?? a.description ?? a.payload?.detail ?? ""}</span>
                   <span className="text-muted-foreground shrink-0">{fmtTs(a.timestamp ?? a.ts ?? "")}</span>
                 </div>
               ))}
@@ -271,7 +344,7 @@ function CreditDecisionLog({ auditLog }: { auditLog: any[] }) {
                     <span className="text-xs font-medium capitalize">{e.action.replace(/_/g, " ")}</span>
                     <span className="text-[10px] text-muted-foreground font-mono truncate">{e.target_id}</span>
                   </div>
-                  <p className="text-[11px] text-muted-foreground mt-0.5">by {e.user_name} · {fmtTs(e.timestamp)}</p>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">by {e.user_name} · {fmtTs(e.timestamp ?? e.ts ?? "")}</p>
                 </div>
               </div>
             ))}
@@ -285,23 +358,43 @@ function CreditDecisionLog({ auditLog }: { auditLog: any[] }) {
 // ─── Anomaly Heatmap ─────────────────────────────────────────────────────────
 function AnomalyHeatmap({ userId }: { userId: string }) {
   const [cotData, setCotData] = useState<any>(null);
+  const [reasoningResult, setReasoningResult] = useState<any>(null);
+  const [vigilanceSummary, setVigilanceSummary] = useState<any>(null);
+  const [twinState, setTwinState] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    reasoningApi.getCot(userId)
-      .then(setCotData)
-      .catch(() => {})
+    Promise.all([
+      reasoningApi.getCot(userId).catch(() => null),
+      reasoningApi.getResult(userId).catch(() => null),
+      vigilanceApi.getSummary(userId).catch(() => null),
+      twinApi.get(userId).catch(() => null),
+    ]).then(([cot, result, vig, twin]) => {
+      setCotData(cot);
+      setReasoningResult(result);
+      setVigilanceSummary(vig);
+      setTwinState(twin);
+    })
       .finally(() => setLoading(false));
   }, [userId]);
 
-  const anomalies: any[] = cotData?.anomalies ?? cotData?.flags ?? [];
+  const base = cotData ?? reasoningResult ?? {};
+  const anomalies: any[] = base?.anomalies ?? base?.flags ?? base?.active_flags ?? [];
+  const riskScore = Math.max(0, Math.min(1, Number(twinState?.risk_score ?? 0.5)));
+  const incomeStability = Math.max(0, Math.min(1, Number(twinState?.income_stability ?? 0.5)));
+  const spendingVol = Math.max(0, Math.min(1, Number(twinState?.spending_volatility ?? 0.5)));
+  const compliance = Math.max(0, Math.min(1, Number(base?.cot_trace?.confidence ?? base?.confidence ?? 0.7)));
+  const deception = Math.max(0, Math.min(1, Number(vigilanceSummary?.deception_score ?? 0.12)));
+  const networkSafety = 1 - deception;
+  const drift = Math.max(0, Math.min(1, Number(base?.contradiction?.contradiction_score ?? riskScore * 0.6)));
+
   const radarData = [
-    { subject: "Income Pattern", A: cotData?.scores?.income_stability ?? Math.random() * 80 + 20 },
-    { subject: "Spend Velocity", A: cotData?.scores?.spend_velocity ?? Math.random() * 80 + 20 },
-    { subject: "Identity Integrity", A: cotData?.scores?.identity_integrity ?? Math.random() * 80 + 20 },
-    { subject: "Network Safety", A: cotData?.scores?.network_safety ?? Math.random() * 80 + 20 },
-    { subject: "Compliance", A: cotData?.scores?.compliance ?? Math.random() * 80 + 20 },
-    { subject: "Behavioral Drift", A: cotData?.scores?.behavioral_drift ?? Math.random() * 80 + 20 },
+    { subject: "Income Pattern", A: Math.round(incomeStability * 100) },
+    { subject: "Spend Velocity", A: Math.round((1 - spendingVol) * 100) },
+    { subject: "Identity Integrity", A: Math.round((1 - deception * 0.8) * 100) },
+    { subject: "Network Safety", A: Math.round(networkSafety * 100) },
+    { subject: "Compliance", A: Math.round(compliance * 100) },
+    { subject: "Behavioral Drift", A: Math.round((1 - drift) * 100) },
   ];
 
   return (
@@ -371,13 +464,13 @@ function LiveWhatIfPanel({ userId }: { userId: string }) {
     }, 700);
 
     try {
-      const res = await simulationApi.run({
+      const res = await adminApi.runTier10LiveWhatIf({
         user_id: userId,
-        scenario_overrides: {
-          income_change_pct: incomeChg[0],
-          expense_change_pct: spendChg[0],
-          scenario_name: scenario,
-        },
+        scenario_name: scenario,
+        income_change_pct: incomeChg[0],
+        expense_change_pct: spendChg[0],
+        num_simulations: 1000,
+        run_counterfactual: true,
       });
       clearInterval(interval);
       setProgress(100);
@@ -390,10 +483,27 @@ function LiveWhatIfPanel({ userId }: { userId: string }) {
     }
   }, [userId, incomeChg, spendChg, scenario]);
 
-  const fanChart: any[] = result?.fan_chart ?? result?.projections ?? [];
-  const ews: any = result?.ews_snapshot ?? result?.risk_snapshot ?? {};
-  const newCreditLimit = result?.recommended_credit_limit ?? result?.new_credit_limit;
-  const riskDelta = result?.risk_delta ?? result?.delta_risk_score;
+  const simulation = result?.simulation ?? result ?? {};
+  const fanChart: any[] = Array.isArray(simulation?.fan_chart_series)
+    ? simulation.fan_chart_series
+    : Array.isArray(simulation?.fan_chart?.p50)
+      ? (simulation.fan_chart.p50 as number[]).map((_: number, i: number) => ({
+          day: i + 1,
+          p10: Number(simulation?.fan_chart?.p10?.[i] ?? 0),
+          p50: Number(simulation?.fan_chart?.p50?.[i] ?? 0),
+          p90: Number(simulation?.fan_chart?.p90?.[i] ?? 0),
+        }))
+      : [];
+  const ews: any = simulation?.ews ?? simulation?.ews_snapshot ?? simulation?.risk_snapshot ?? {};
+  const day90 = simulation?.simulation_windows?.day_90 ?? simulation?.temporal_projections?.day_90 ?? {};
+  const newCreditLimit =
+    result?.updated_credit_limit
+    ?? simulation?.proactive_offer?.approved_amount
+    ?? simulation?.recommended_credit_limit
+    ?? simulation?.new_credit_limit;
+  const updatedRiskScore = Number(result?.updated_risk_score ?? result?.updated_twin_state?.risk_score ?? NaN);
+  const latencyMs = Number(result?.latency_ms ?? 0);
+  const slaMet = Boolean(result?.sla_met);
 
   return (
     <Card className="border-border shadow-sm">
@@ -496,30 +606,30 @@ function LiveWhatIfPanel({ userId }: { userId: string }) {
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     {
-                      label: "Risk Delta",
-                      value: riskDelta !== undefined
-                        ? `${riskDelta > 0 ? "+" : ""}${(riskDelta * 100).toFixed(1)}%`
+                      label: "Default P(90d)",
+                      value: day90?.default_probability !== undefined
+                        ? `${(Number(day90.default_probability) * 100).toFixed(1)}%`
                         : "—",
-                      bad: riskDelta > 0,
+                      bad: Number(day90?.default_probability ?? 0) > 0.3,
                     },
                     {
-                      label: "New Credit Limit",
+                      label: "Updated Credit Limit",
                       value: newCreditLimit
                         ? `₹${(newCreditLimit / 100000).toFixed(1)}L`
                         : "—",
                       bad: false,
                     },
                     {
-                      label: "EWS Level",
-                      value: ews.level ?? ews.status ?? "—",
-                      bad: ["RED", "ORANGE"].includes(ews.level ?? ""),
+                      label: "Updated Twin Risk",
+                      value: Number.isFinite(updatedRiskScore)
+                        ? `${(updatedRiskScore * 100).toFixed(1)}%`
+                        : "—",
+                      bad: Number.isFinite(updatedRiskScore) ? updatedRiskScore > 0.6 : false,
                     },
                     {
-                      label: "P50 Risk Score",
-                      value: fanChart[Math.floor(fanChart.length / 2)]?.p50 !== undefined
-                        ? `${fanChart[Math.floor(fanChart.length / 2)].p50.toFixed(1)}`
-                        : "—",
-                      bad: false,
+                      label: "EWS Severity",
+                      value: ews.severity ?? ews.level ?? ews.status ?? "—",
+                      bad: ["RED", "ORANGE"].includes(String(ews.severity ?? ews.level ?? "").toUpperCase()),
                     },
                   ].map((m) => (
                     <div key={m.label} className="bg-muted/40 rounded-lg p-3">
@@ -531,11 +641,26 @@ function LiveWhatIfPanel({ userId }: { userId: string }) {
                   ))}
                 </div>
 
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-muted/40 rounded-lg p-3">
+                    <p className="text-[10px] text-muted-foreground">Execution Latency</p>
+                    <p className={cn("text-sm font-bold mt-0.5", slaMet ? "text-emerald-400" : "text-red-400")}>
+                      {latencyMs > 0 ? `${latencyMs} ms` : "—"}
+                    </p>
+                  </div>
+                  <div className="bg-muted/40 rounded-lg p-3">
+                    <p className="text-[10px] text-muted-foreground">SLA (≤10s)</p>
+                    <p className={cn("text-sm font-bold mt-0.5", slaMet ? "text-emerald-400" : "text-red-400")}>
+                      {latencyMs > 0 ? (slaMet ? "Met" : "Breached") : "—"}
+                    </p>
+                  </div>
+                </div>
+
                 {fanChart.length > 0 && (
                   <ResponsiveContainer width="100%" height={140}>
-                    <AreaChart data={fanChart.slice(0, 12)} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+                    <AreaChart data={fanChart.slice(0, 60)} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                      <XAxis dataKey="month" tick={{ fontSize: 9 }} />
+                      <XAxis dataKey="day" tick={{ fontSize: 9 }} />
                       <YAxis tick={{ fontSize: 9 }} />
                       <Tooltip contentStyle={{ fontSize: 10 }} />
                       <Area type="monotone" dataKey="p90" stroke="#22c55e" fill="#22c55e" fillOpacity={0.1} strokeWidth={1} />
@@ -543,6 +668,20 @@ function LiveWhatIfPanel({ userId }: { userId: string }) {
                       <Area type="monotone" dataKey="p10" stroke="#ef4444" fill="#ef4444" fillOpacity={0.1} strokeWidth={1} />
                     </AreaChart>
                   </ResponsiveContainer>
+                )}
+
+                {result?.updated_twin_state && (
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div className="bg-muted/30 rounded px-2 py-1 border border-border/50">
+                      Liquidity: <span className="font-semibold">{String(result.updated_twin_state.liquidity_health ?? "—")}</span>
+                    </div>
+                    <div className="bg-muted/30 rounded px-2 py-1 border border-border/50">
+                      Persona: <span className="font-semibold">{String(result.updated_twin_state.persona ?? "—")}</span>
+                    </div>
+                    <div className="bg-muted/30 rounded px-2 py-1 border border-border/50">
+                      CIBIL-Like: <span className="font-semibold">{String(result.updated_twin_state.cibil_like_score ?? "—")}</span>
+                    </div>
+                  </div>
                 )}
 
                 {ews.top_risk_factors?.length > 0 && (
@@ -572,12 +711,22 @@ function ReasoningTracePanel({ userId }: { userId: string }) {
 
   useEffect(() => {
     reasoningApi.getCot(userId)
-      .then(setCot)
-      .catch(() => {})
+      .then(async (data) => {
+        if (!data) {
+          const fallback = await reasoningApi.getResult(userId).catch(() => null);
+          setCot(fallback);
+          return;
+        }
+        setCot(data);
+      })
+      .catch(async () => {
+        const fallback = await reasoningApi.getResult(userId).catch(() => null);
+        setCot(fallback);
+      })
       .finally(() => setLoading(false));
   }, [userId]);
 
-  const steps: any[] = cot?.steps ?? cot?.chain_of_thought ?? [];
+  const steps: any[] = normalizeCotSteps(cot);
 
   return (
     <Card className="border-border shadow-sm">
@@ -628,57 +777,31 @@ function ReasoningTracePanel({ userId }: { userId: string }) {
 function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: any[] }) {
   const [generating, setGenerating] = useState(false);
 
-  const generateReport = async (format: "json" | "csv") => {
+  const generateReport = async (format: "json" | "pdf") => {
     setGenerating(true);
     try {
-      const [twin, history, triggers, cot, ews, auditTrail] = await Promise.all([
-        twinApi.get(userId).catch(() => null),
-        twinApi.getHistory(userId).catch(() => []),
-        twinApi.getTriggers(userId).catch(() => []),
-        reasoningApi.getCot(userId).catch(() => null),
-        simulationApi.getEws(userId).catch(() => null),
-        twinApi.getAudit(userId).catch(() => []),
-      ]);
-
-      const report = {
-        generated_at: new Date().toISOString(),
-        user_id: userId,
-        regulatory_standard: "RBI Digital Lending Guidelines 2023 — Section 4.2",
-        twin_current_state: twin,
-        twin_evolution_history: history,
-        intervention_triggers: triggers,
-        twin_audit_trail: auditTrail,
-        llm_chain_of_thought: cot,
-        ews_snapshot: ews,
-        credit_decision_log: auditLog.filter((e: any) =>
-          ["loan_approved", "loan_denied", "score_submitted"].includes(e.action)
-        ),
-        simulation_artifacts: {
-          note: "Run a What-If simulation to attach artifacts here.",
-        },
-      };
-
       if (format === "json") {
-        const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+        const report = await adminApi.getTier10Report(userId);
+        const merged = {
+          ...report,
+          ui_credit_decision_log_snapshot: auditLog.filter((e: any) =>
+            ["loan_approved", "loan_denied", "score_submitted", "threshold_updated"].includes(e.action)
+          ),
+          exported_at: new Date().toISOString(),
+        };
+        const blob = new Blob([JSON.stringify(merged, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `airavat_audit_${userId}_${Date.now()}.json`;
+        a.download = `airavat_tier10_audit_${userId}_${Date.now()}.json`;
         a.click();
         URL.revokeObjectURL(url);
       } else {
-        // CSV — flatten top-level decisions
-        const decisions = report.credit_decision_log;
-        const headers = ["id", "action", "user_name", "target_id", "target_type", "timestamp"];
-        const rows = decisions.map((r: any) =>
-          headers.map((h) => JSON.stringify(r[h] ?? "")).join(",")
-        );
-        const csv = [headers.join(","), ...rows].join("\n");
-        const blob = new Blob([csv], { type: "text/csv" });
+        const blob = await adminApi.downloadTier10ReportPdf(userId);
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url;
-        a.download = `airavat_decisions_${userId}_${Date.now()}.csv`;
+        a.download = `airavat_tier10_audit_${userId}_${Date.now()}.pdf`;
         a.click();
         URL.revokeObjectURL(url);
       }
@@ -706,7 +829,7 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
               <div className="p-2 bg-primary/10 rounded-lg"><FileText className="w-4 h-4 text-primary" /></div>
               <div>
                 <p className="text-sm font-semibold">Full Audit Report</p>
-                <p className="text-[10px] text-muted-foreground">JSON · twin history + CoT traces + interventions</p>
+                <p className="text-[10px] text-muted-foreground">JSON · full machine-readable Tier 10 bundle</p>
               </div>
             </div>
             <Button
@@ -715,7 +838,7 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
               onClick={() => generateReport("json")}
             >
               {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-              Export Full Report (JSON)
+              Export Tier 10 Report (JSON)
             </Button>
           </div>
 
@@ -723,18 +846,18 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
             <div className="flex items-center gap-2">
               <div className="p-2 bg-emerald-500/10 rounded-lg"><FileText className="w-4 h-4 text-emerald-400" /></div>
               <div>
-                <p className="text-sm font-semibold">Decision Log</p>
-                <p className="text-[10px] text-muted-foreground">CSV · credit approvals/denials for auditors</p>
+                <p className="text-sm font-semibold">Regulatory PDF</p>
+                <p className="text-[10px] text-muted-foreground">PDF · compact compliance summary for auditors</p>
               </div>
             </div>
             <Button
               variant="outline"
               className="w-full gap-2 text-xs h-8"
               disabled={generating}
-              onClick={() => generateReport("csv")}
+              onClick={() => generateReport("pdf")}
             >
               {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-              Export Decision Log (CSV)
+              Export Tier 10 Report (PDF)
             </Button>
           </div>
         </div>
@@ -773,17 +896,13 @@ export default function ComplianceDashboard() {
     if (!user) return;
     if (user.role !== "admin") { router.push("/unauthorized"); return; }
     adminApi.getAuditLog().then((d: any) => setAuditLog(Array.isArray(d) ? d : [])).catch(() => {});
-    // Fetch twin user list
-    fetch(`${process.env.NEXT_PUBLIC_API_URL ?? ""}/twin-users`)
-      .then((r) => r.json())
+    adminApi.getTwinUsers()
       .then((d: any) => {
-        const ids: string[] = d?.user_ids ?? [];
+        const ids: string[] = Array.isArray(d?.user_ids) ? d.user_ids : [];
         setTwinUsers(ids);
         if (ids.length > 0) setSelectedUser(ids[0]);
       })
-      .catch(() => {
-        // Fallback — extract from audit log
-      });
+      .catch(() => {});
   }, [user, router]);
 
   // Fallback: extract user IDs from audit log if twin-users fails

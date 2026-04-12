@@ -35,6 +35,7 @@ import re
 import time
 import uuid
 import asyncio
+from collections import defaultdict
 import polars as pl
 import glob
 import logging
@@ -2596,103 +2597,325 @@ _INDIVIDUAL_SCORES: dict[str, dict] = {
 @router.get("/individual/{user_id}/score")
 async def get_individual_score(user_id: str, request: Request) -> dict[str, Any]:
     _pipeline_log("INDIVIDUAL_SCORE", f"computing score for user_id={user_id}")
-    
-    health_score = 68
-    risk_band = "medium_risk"
-    final_credit_score = 650
-    
-    # 1. Fetch live ML-driven score from the Digital Twin in Redis
+
+    def _to_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if value in (None, ""):
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
+        return max(lo, min(hi, value))
+
+    def _pct(value: float) -> float:
+        return round(_clamp(value, 0.0, 1.0) * 100.0, 2)
+
+    redis = request.app.state.redis
+
+    # 1) Tier 4 twin state (credit + risk)
+    twin = None
     try:
         from src.twin.twin_store import TwinStore
-        store = TwinStore(request.app.state.redis)
-        twin = await store.get(user_id)
-        if twin:
-            final_credit_score = int((1.0 - twin.risk_score) * 1000)
-            final_credit_score = max(300, min(900, final_credit_score))
-            health_score = max(30, min(100, int((final_credit_score / 900) * 100)))
-            risk_band = twin.risk_band
-    except Exception as e:
-        print(f"Twin lookup failed: {e}")
+        twin = await TwinStore(redis).get(user_id)
+    except Exception as exc:
+        _pipeline_log("INDIVIDUAL_TWIN_READ_FAIL", str(exc), level="WARNING")
 
-    # 2. Extract features to populate the rest of the widgets
-    feat_path = FEATURES_PATH / f"user_id={user_id}" / "features.parquet"
-    row = {}
-    if feat_path.exists():
+    # 2) Tier 3 features (prefer Redis cache; fallback parquet)
+    feat_row: dict[str, Any] = {}
+    try:
+        raw_feat = await redis.get(f"twin:features:{user_id}")
+        if raw_feat:
+            feat_row = json.loads(raw_feat)
+    except Exception:
+        feat_row = {}
+
+    if not feat_row:
+        feat_path = FEATURES_PATH / f"user_id={user_id}" / "features.parquet"
+        if feat_path.exists():
+            try:
+                df = pl.read_parquet(feat_path)
+                if not df.is_empty():
+                    feat_row = df.to_dicts()[-1]
+            except Exception as exc:
+                _pipeline_log("INDIVIDUAL_FEATURE_READ_FAIL", str(exc), level="WARNING")
+
+    # 3) Real transactions for category split and trend
+    txns, _ = _get_real_transactions(user_id, limit=5000)
+    now = datetime.utcnow()
+    cutoff_30d = now - timedelta(days=30)
+    cutoff_180d = now - timedelta(days=180)
+
+    inbound_30d = 0.0
+    outbound_30d = 0.0
+    upi_txn_count_30d = 0
+    spending_by_cat: dict[str, float] = defaultdict(float)
+    monthly_inbound: dict[str, float] = defaultdict(float)
+
+    for tx in txns:
+        ts_raw = tx.get("timestamp") or tx.get("date")
+        ts = None
         try:
-            df = pl.read_parquet(feat_path)
-            if not df.is_empty():
-                row = df.to_dicts()[-1]
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+        except Exception:
+            try:
+                ts = datetime.fromisoformat(str(ts_raw)[:19])
+            except Exception:
+                ts = None
+        if ts is None:
+            continue
+
+        direction = str(tx.get("direction", "")).lower()
+        amount = abs(_to_float(tx.get("amount"), 0.0))
+        month_key = ts.strftime("%Y-%m")
+
+        if ts >= cutoff_180d and ("in" in direction):
+            monthly_inbound[month_key] += amount
+
+        if ts < cutoff_30d:
+            continue
+
+        upi_txn_count_30d += 1
+        if "in" in direction:
+            inbound_30d += amount
+        else:
+            outbound_30d += amount
+            cat = str(tx.get("merchant_category") or "Others").strip() or "Others"
+            spending_by_cat[cat] += amount
+
+    income_30d = _to_float(feat_row.get("income_30d"), inbound_30d)
+    if income_30d <= 0.0:
+        income_30d = inbound_30d
+
+    essential_30d = _to_float(feat_row.get("essential_30d"), 0.0)
+    discretionary_30d = _to_float(feat_row.get("discretionary_30d"), 0.0)
+    if essential_30d + discretionary_30d <= 0.0:
+        if outbound_30d > 0:
+            essential_30d = outbound_30d * 0.62
+            discretionary_30d = outbound_30d * 0.38
+
+    monthly_expense_est = max(0.0, essential_30d + discretionary_30d)
+    monthly_income_est = max(0.0, income_30d)
+
+    savings_rate = _to_float(feat_row.get("savings_rate"), 0.0)
+    if savings_rate <= 0 and monthly_income_est > 0:
+        savings_rate = _clamp((monthly_income_est - monthly_expense_est) / max(monthly_income_est, 1.0), -1.0, 1.0)
+
+    emi_burden = _to_float(
+        feat_row.get("emi_burden_ratio"),
+        _to_float(getattr(twin, "emi_burden_ratio", 0.0), 0.0),
+    )
+    debit_credit_ratio = _to_float(feat_row.get("debit_credit_ratio"), 0.0)
+    if debit_credit_ratio <= 0 and monthly_income_est > 0:
+        debit_credit_ratio = _clamp(monthly_expense_est / max(monthly_income_est, 1.0), 0.0, 2.0)
+
+    credit_utilisation = _to_float(feat_row.get("credit_card_utilisation_pct"), 0.0)
+    if credit_utilisation <= 0:
+        cash_dep = _to_float(feat_row.get("cash_dependency_index"), 0.25)
+        credit_utilisation = _clamp(0.15 + 0.6 * cash_dep, 0.05, 0.95) * 100.0
+
+    income_stability = _to_float(feat_row.get("income_stability_score"), _to_float(getattr(twin, "income_stability", 0.5), 0.5))
+    spending_volatility = _to_float(feat_row.get("spending_volatility_index"), _to_float(getattr(twin, "spending_volatility", 0.4), 0.4))
+    cash_buffer_days = _to_float(feat_row.get("cash_buffer_days"), _to_float(getattr(twin, "cash_buffer_days", 12.0), 12.0))
+    liquidity_index = _to_float(getattr(twin, "liquidity_health_index", 0.5), 0.5)
+
+    vig_data = _VIGILANCE_DATA.get(user_id, {})
+    network_safety = 1.0 - _clamp(_to_float(vig_data.get("deception_score"), 0.08), 0.0, 1.0)
+
+    credit_score = int(_to_float(getattr(twin, "cibil_like_score", lambda: 650)() if twin else 650, 650))
+    credit_score = max(300, min(900, credit_score))
+
+    # Complex weighted index over five dimensions (returns 0-100 health score).
+    comp_credit = _clamp((credit_score - 300.0) / 600.0)
+    comp_liquidity = _clamp(0.60 * _clamp(cash_buffer_days / 30.0) + 0.40 * liquidity_index)
+    comp_stability = _clamp(0.65 * income_stability + 0.35 * (1.0 - _clamp(spending_volatility / 1.5)))
+    savings_norm = _clamp((savings_rate + 0.10) / 0.60)
+    emi_norm = _clamp(emi_burden / 0.60)
+    dcr_norm = _clamp(debit_credit_ratio / 1.20)
+    cc_util_norm = _clamp((credit_utilisation / 100.0) / 0.90)
+    comp_behavior = _clamp(0.35 * savings_norm + 0.25 * (1.0 - emi_norm) + 0.20 * (1.0 - dcr_norm) + 0.20 * (1.0 - cc_util_norm))
+    comp_network = _clamp(network_safety)
+
+    weights = {
+        "credit": 0.30,
+        "liquidity": 0.20,
+        "stability": 0.20,
+        "behavior": 0.20,
+        "network": 0.10,
+    }
+
+    health_score = int(round(100.0 * (
+        weights["credit"] * comp_credit
+        + weights["liquidity"] * comp_liquidity
+        + weights["stability"] * comp_stability
+        + weights["behavior"] * comp_behavior
+        + weights["network"] * comp_network
+    )))
+    health_score = max(0, min(100, health_score))
+
+    if twin and getattr(twin, "risk_band", None):
+        risk_band = str(twin.risk_band)
+    else:
+        risk_band = "low_risk" if health_score >= 70 else ("medium_risk" if health_score >= 45 else "high_risk")
+
+    # Spending category breakdown from real outbound transactions.
+    top_spending_categories: list[dict[str, Any]] = []
+    total_spend = sum(spending_by_cat.values())
+    if total_spend > 0:
+        ranked = sorted(spending_by_cat.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        top_spending_categories = [
+            {"category": cat, "pct": round((amt / total_spend) * 100.0, 1)}
+            for cat, amt in ranked
+        ]
+
+    # Income trend from 6-month inbound slope.
+    income_trend = "stable"
+    if monthly_inbound:
+        monthly_keys = sorted(monthly_inbound.keys())[-6:]
+        values = [monthly_inbound[k] for k in monthly_keys]
+        if len(values) >= 4:
+            left = sum(values[: len(values) // 2]) / max(1, len(values) // 2)
+            right = sum(values[len(values) // 2 :]) / max(1, len(values) - len(values) // 2)
+            delta = (right - left) / max(left, 1.0)
+            if delta > 0.06:
+                income_trend = "rising"
+            elif delta < -0.06:
+                income_trend = "declining"
+
+    # Score history from live twin risk history where possible.
+    score_history: list[dict[str, Any]] = []
+    if twin and getattr(twin, "risk_history", None):
+        recent = list(twin.risk_history)[-6:]
+        for idx, r in enumerate(recent):
+            ts = now - timedelta(days=(len(recent) - idx) * 30)
+            score_history.append({"date": ts.strftime("%Y-%m-%d"), "score": int(round((1.0 - _clamp(_to_float(r), 0.0, 1.0)) * 100.0))})
+    elif user_id in _INDIVIDUAL_SCORES:
+        score_history = list(_INDIVIDUAL_SCORES[user_id].get("score_history", []))
+    else:
+        score_history = [
+            {"date": (now - timedelta(days=60)).strftime("%Y-%m-%d"), "score": max(0, health_score - 3)},
+            {"date": (now - timedelta(days=30)).strftime("%Y-%m-%d"), "score": max(0, health_score - 1)},
+            {"date": now.strftime("%Y-%m-%d"), "score": health_score},
+        ]
+
+    # Human-facing insights generated from computed metrics.
+    insights: list[str] = [
+        f"Estimated monthly income is ₹{int(round(monthly_income_est)):,} and estimated expenses are ₹{int(round(monthly_expense_est)):,}.",
+        (
+            f"Savings rate is {_pct(_clamp((savings_rate + 1.0) / 2.0)):.1f}% equivalent, indicating strong surplus discipline."
+            if savings_rate >= 0.20
+            else f"Savings rate is {_pct(_clamp((savings_rate + 1.0) / 2.0)):.1f}% equivalent; improving monthly surplus can raise your score."
+        ),
+        (
+            f"EMI burden at {round(emi_burden * 100.0, 1)}% is well within prudent limits."
+            if emi_burden <= 0.30
+            else f"EMI burden at {round(emi_burden * 100.0, 1)}% is elevated and is constraining credit headroom."
+        ),
+        f"Vigilance deception confidence is {round((1.0 - comp_network) * 100.0, 1)}%, feeding the network safety component.",
+    ]
+
+    # Fetch real ML-driven explainability from Redis (populated by scoring_worker)
+    user_credit_data = await redis.hgetall(f"credit:user:{user_id}")
+    real_top5 = []
+    real_waterfall = []
+    if user_credit_data:
+        try:
+            # Handle both bytes (Redis standard) and strings
+            raw_t5 = user_credit_data.get(b"shap_top5", user_credit_data.get("shap_top5", b"[]"))
+            raw_wf = user_credit_data.get(b"shap_waterfall", user_credit_data.get("shap_waterfall", b"[]"))
+            
+            t5_str = raw_t5.decode("utf-8") if isinstance(raw_t5, bytes) else raw_t5
+            wf_str = raw_wf.decode("utf-8") if isinstance(raw_wf, bytes) else raw_wf
+            
+            real_top5 = json.loads(t5_str)
+            raw_wf_data = json.loads(wf_str)
+            if isinstance(raw_wf_data, dict) and "contributions" in raw_wf_data:
+                real_waterfall = raw_wf_data["contributions"]
+            elif isinstance(raw_wf_data, list):
+                real_waterfall = raw_wf_data
         except Exception as e:
-            pass
+            _log.warning(f"Error parsing real SHAP for {user_id}: {e}")
 
-    if not row:
-        transactions = _get_real_transactions(user_id, limit=500).get("transactions", [])
-        if transactions:
-            inflow = sum(t["amount"] for t in transactions if t["direction"] == "INBOUND")
-            outflow = abs(sum(t["amount"] for t in transactions if t["direction"] == "OUTBOUND"))
-            row = {
-                "income_30d": inflow,
-                "essential_30d": outflow * 0.6,
-                "discretionary_30d": outflow * 0.4,
-                "savings_rate": (inflow - outflow) / max(inflow, 1.0),
-                "emi_burden_ratio": 0.15,
-                "income_stability_score": 0.85,
-                "upi_transaction_count_30d": len(transactions),
-                "debit_credit_ratio": outflow / max(inflow, 1.0),
-                "credit_card_utilisation_pct": 22.0
-            }
-
-    savings = row.get("savings_rate", 0.1)
-    emi = row.get("emi_burden_ratio", 0.15)
+    # Dynamic Reasons using Trigger Engine or Real SHAP
+    final_reasons = []
+    if real_top5:
+        final_reasons = [f"{f['feature_name'].replace('_', ' ').title()} is a primary factor" for f in real_top5[:3]]
+    elif twin:
+        from src.intervention.trigger_engine import evaluate_triggers
+        # Use previous volatility if available for QoQ triggers
+        prev_vol = None
+        if len(getattr(twin, "risk_history", [])) > 1:
+            prev_vol = twin.spending_volatility # Approximation
+        
+        triggers = evaluate_triggers(twin, prev_spending_volatility=prev_vol)
+        final_reasons = [t.reason for t in triggers[:3]]
     
+    if not final_reasons:
+        # Last resort fallback (still based on data, just formatted strings)
+        final_reasons = [
+            "Strong liquidity with over 15 days of cash buffer." if comp_liquidity > 0.6 else "Maintaining a larger cash buffer could further improve resilience.",
+            "High network trust score with no deceptive patterns detected." if comp_network > 0.85 else "Strengthening counterparty trust networks would benefit your profile.",
+            "Stable income profile over the last 6 months." if income_trend == "stable" or income_trend == "rising" else "Increasing income stability would positively impact your health score.",
+        ]
+
+    # Dynamic Waterfall
+    final_waterfall = real_waterfall if real_waterfall else [
+        {"feature": "Credit Strength", "abs_magnitude": round(weights["credit"] * comp_credit, 4), "sign": 1},
+        {"feature": "Liquidity", "abs_magnitude": round(weights["liquidity"] * comp_liquidity, 4), "sign": 1},
+        {"feature": "Stability", "abs_magnitude": round(weights["stability"] * comp_stability, 4), "sign": 1},
+        {"feature": "Behavior", "abs_magnitude": round(weights["behavior"] * comp_behavior, 4), "sign": 1},
+        {"feature": "Network", "abs_magnitude": round(weights["network"] * comp_network, 4), "sign": 1},
+    ]
+
     return {
         "user_id": user_id,
         "status": "complete",
         "financial_health_score": health_score,
-        "credit_score": final_credit_score,
+        "credit_score": credit_score,
         "risk_band": risk_band,
-        "monthly_income_estimate": int(row.get("income_30d", 85000)),
-        "monthly_expense_estimate": int(row.get("essential_30d", 40000) + row.get("discretionary_30d", 12000)),
-        "savings_rate_pct": float(savings * 100),
-        "emi_burden_pct": float(emi * 100),
-        "upi_transaction_count_30d": int(row.get("upi_transaction_count_30d", 124)),
-        "debit_credit_ratio": float(row.get("debit_credit_ratio", 0.34)),
-        "credit_card_utilisation_pct": float(row.get("credit_card_utilisation_pct", 24.5)),
-            "top_spending_categories": [
-                {"category": "Retail", "pct": 32},
-                {"category": "Food & Dining", "pct": 28},
-                {"category": "Transfer", "pct": 25},
-                {"category": "Services", "pct": 15},
-            ],
-            "income_trend": "stable",
-            "insights": [
-                f"Your estimated monthly income is ₹{int(row.get('income_30d', 85000)):,}.",
-                f"Savings rate of {savings*100:.1f}% shows healthy financial buffer.",
-                "EMI burden is low, qualifying you for instant personal credit line."
-            ],
-            "score_history": [
-                {"date": "2026-02-01", "score": health_score - 2},
-                {"date": "2026-03-01", "score": health_score - 1},
-                {"date": "2026-04-01", "score": health_score},
-            ],
-            "computed_at": _now()
-        }
-
-    # Ultimate fallback
-    data = _INDIVIDUAL_SCORES.get(user_id, _INDIVIDUAL_SCORES["u_064835b7"])
-    return {**data, "computed_at": _now()}
+        "monthly_income_estimate": int(round(monthly_income_est)),
+        "monthly_expense_estimate": int(round(monthly_expense_est)),
+        "savings_rate_pct": round(savings_rate * 100.0, 2),
+        "emi_burden_pct": round(emi_burden * 100.0, 2),
+        "upi_transaction_count_30d": int(_to_float(feat_row.get("upi_transaction_count_30d"), upi_txn_count_30d)),
+        "debit_credit_ratio": round(debit_credit_ratio, 4),
+        "credit_card_utilisation_pct": round(credit_utilisation, 2),
+        "top_reasons": final_reasons,
+        "shap_waterfall": final_waterfall,
+        "top_spending_categories": top_spending_categories,
+        "income_trend": income_trend,
+        "insights": insights,
+        "score_history": score_history,
+        "health_explanation": "Weighted blend of credit, liquidity, stability, behavior, and vigilance network safety.",
+        "score_formula": "health = 100 * (0.30*credit + 0.20*liquidity + 0.20*stability + 0.20*behavior + 0.10*network)",
+        "score_components": [
+            {"id": "credit", "label": "Credit Strength", "weight": weights["credit"], "value": round(comp_credit, 4), "contribution": round(weights["credit"] * comp_credit * 100.0, 2)},
+            {"id": "liquidity", "label": "Liquidity Resilience", "weight": weights["liquidity"], "value": round(comp_liquidity, 4), "contribution": round(weights["liquidity"] * comp_liquidity * 100.0, 2)},
+            {"id": "stability", "label": "Income Stability", "weight": weights["stability"], "value": round(comp_stability, 4), "contribution": round(weights["stability"] * comp_stability * 100.0, 2)},
+            {"id": "behavior", "label": "Spending & Debt Behavior", "weight": weights["behavior"], "value": round(comp_behavior, 4), "contribution": round(weights["behavior"] * comp_behavior * 100.0, 2)},
+            {"id": "network", "label": "Network Trust", "weight": weights["network"], "value": round(comp_network, 4), "contribution": round(weights["network"] * comp_network * 100.0, 2)},
+        ],
+        "pipeline": {
+            "tier1_ingestion": bool(txns),
+            "tier2_semantic_classification": bool(txns),
+            "tier3_feature_vector": bool(feat_row),
+            "tier4_digital_twin": bool(twin),
+            "tier8_vigilance": bool(vig_data),
+        },
+        "computed_at": _now(),
+    }
 
 
 @router.get("/individual/{user_id}/insights")
-async def get_individual_insights(user_id: str) -> dict[str, Any]:
-    data = _INDIVIDUAL_SCORES.get(user_id)
-    if not data:
-        raise HTTPException(status_code=404, detail="Individual data not found")
+async def get_individual_insights(user_id: str, request: Request) -> dict[str, Any]:
+    data = await get_individual_score(user_id, request)
     return {
         "user_id": user_id,
-        "insights": data["insights"],
-        "top_spending_categories": data["top_spending_categories"],
-        "income_trend": data["income_trend"],
+        "insights": data.get("insights", []),
+        "top_spending_categories": data.get("top_spending_categories", []),
+        "income_trend": data.get("income_trend", "stable"),
+        "computed_at": data.get("computed_at", _now()),
     }
 
 

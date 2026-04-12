@@ -81,7 +81,7 @@ export function VigilanceReasoningCard({ userId }: VigilanceReasoningCardProps) 
   if (loading) {
     return (
       <Card className="h-full border-border/50 glass overflow-hidden">
-        <CardContent className="flex flex-col items-center justify-center h-[300px] gap-3">
+        <CardContent className="flex flex-col items-center justify-center h-[240px] gap-3">
           <Loader2 className="w-8 h-8 animate-spin text-primary/50" />
           <p className="text-xs text-muted-foreground font-mono uppercase tracking-widest">Initialising Guardian AI...</p>
         </CardContent>
@@ -142,9 +142,9 @@ export function VigilanceReasoningCard({ userId }: VigilanceReasoningCardProps) 
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
-              className="p-5 flex flex-col h-full gap-5"
+              className="p-4 flex flex-col h-full gap-3"
             >
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
@@ -214,12 +214,10 @@ export function VigilanceReasoningCard({ userId }: VigilanceReasoningCardProps) 
                 </div>
               </div>
 
-              <div className="mt-auto">
-                <Button variant="outline" size="sm" className="w-full gap-2 border-white/10 hover:bg-white/5 group h-8">
-                  <Eye className="w-3 h-3 group-hover:text-primary transition-colors" />
-                  <span className="text-[10px] uppercase font-bold">Deep Scan Registry</span>
-                </Button>
-              </div>
+              <Button variant="outline" size="sm" className="w-full gap-2 border-white/10 hover:bg-white/5 group h-8">
+                <Eye className="w-3 h-3 group-hover:text-primary transition-colors" />
+                <span className="text-[10px] uppercase font-bold">Deep Scan Registry</span>
+              </Button>
             </motion.div>
           ) : (
             <motion.div
@@ -227,13 +225,13 @@ export function VigilanceReasoningCard({ userId }: VigilanceReasoningCardProps) 
               initial={{ opacity: 0, x: 10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -10 }}
-              className="p-5 flex flex-col h-full gap-5"
+              className="p-4 flex flex-col h-full gap-3"
             >
               <div className="space-y-3">
                 <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest flex items-center gap-1.5">
                   <MessageSquare className="w-3 h-3" /> AI Narrative Explanation
                 </p>
-                <div className="bg-black/20 rounded-xl p-4 border border-white/5 min-h-[140px] relative">
+                <div className="bg-black/20 rounded-xl p-3 border border-white/5 min-h-[96px] relative">
                   <div className="absolute top-0 left-0 w-1 h-full bg-primary/40 rounded-full" />
                   <p className="text-sm italic leading-relaxed text-foreground/90 font-serif">
                     "{narrative}"

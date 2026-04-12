@@ -28,6 +28,33 @@ import redis.asyncio as aioredis
 _TTL = int(timedelta(hours=24).total_seconds())
 
 
+def _coerce_hash_payload(payload: dict[str, str]) -> dict:
+    parsed: dict = {}
+    for key, value in payload.items():
+        raw = (value or "").strip()
+        if raw == "":
+            parsed[key] = ""
+            continue
+        if raw.lower() in {"true", "false"}:
+            parsed[key] = raw.lower() == "true"
+            continue
+        try:
+            parsed[key] = json.loads(raw)
+            continue
+        except json.JSONDecodeError:
+            pass
+        try:
+            parsed[key] = int(raw)
+            continue
+        except (TypeError, ValueError):
+            pass
+        try:
+            parsed[key] = float(raw)
+        except (TypeError, ValueError):
+            parsed[key] = value
+    return parsed
+
+
 async def emit_simulation_completed(
     redis: aioredis.Redis,
     user_id: str,
@@ -84,34 +111,41 @@ async def emit_simulation_completed(
 
     regime_dist = sim_result.get("regime_distribution_at_90d", {})
 
-    twin_update_hash = {
-        "predicted_risk_trajectory": json.dumps(trajectory),
-        "ews_14d": str(float(ews.get("ews_14d", 0.0) or 0.0)),
-        "regime_distribution": json.dumps(regime_dist),
-        "recovery_plan_active": "true" if sim_result.get("recovery_plan", {}).get("steps") else "false",
-        "fan_chart_cache_key": fan_key,
-        "last_simulation_id": sim_id,
-    }
+    twin_key = f"twin:{user_id}"
+    twin_data: dict = {}
+
+    twin_raw: str | None = None
     try:
-        await redis.hset(f"twin:{user_id}", mapping=twin_update_hash)
-    except Exception:
-        twin_raw = await redis.get(f"twin:{user_id}")
-        if twin_raw:
+        twin_raw = await redis.get(twin_key)
+    except Exception as exc:
+        if "WRONGTYPE" in str(exc):
             try:
-                twin_data = json.loads(twin_raw)
-            except json.JSONDecodeError:
-                twin_data = {}
-            twin_data.update(
-                {
-                    "predicted_risk_trajectory": trajectory,
-                    "ews_14d": float(ews.get("ews_14d", 0.0) or 0.0),
-                    "regime_distribution": regime_dist,
-                    "recovery_plan_active": bool(sim_result.get("recovery_plan", {}).get("steps")),
-                    "fan_chart_cache_key": fan_key,
-                    "last_simulation_id": sim_id,
-                }
-            )
-            await redis.set(f"twin:{user_id}", json.dumps(twin_data, default=str))
+                hash_payload = await redis.hgetall(twin_key)
+            except Exception:
+                hash_payload = {}
+            twin_data = _coerce_hash_payload(hash_payload) if hash_payload else {}
+        else:
+            twin_data = {}
+
+    if twin_raw:
+        try:
+            twin_data = json.loads(twin_raw)
+        except json.JSONDecodeError:
+            twin_data = {}
+
+    twin_data.update(
+        {
+            "predicted_risk_trajectory": trajectory,
+            "ews_14d": float(ews.get("ews_14d", 0.0) or 0.0),
+            "regime_distribution": regime_dist,
+            "recovery_plan_active": bool(sim_result.get("recovery_plan", {}).get("steps")),
+            "fan_chart_cache_key": fan_key,
+            "last_simulation_id": sim_id,
+        }
+    )
+    # Preserve minimum schema compatibility for DigitalTwin deserialization.
+    twin_data.setdefault("user_id", user_id)
+    await redis.set(twin_key, json.dumps(twin_data, default=str))
 
     # ── 5. Publish simulation_completed event ─────────────────────────────────
     event = json.dumps({

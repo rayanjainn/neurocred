@@ -60,12 +60,48 @@ _INTENT_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(explain|what|why|how)", re.I), "explain"),
 ]
 
+_FOLLOWUP_PATTERN = re.compile(
+    r"\b(and|also|same|that|it|this|those|what about|how about|then|continue)\b",
+    re.I,
+)
+
 
 def _detect_intent(message: str) -> str:
     for pattern, intent in _INTENT_PATTERNS:
         if pattern.search(message):
             return intent
     return "general"
+
+
+def _contextualize_message(
+    message: str,
+    conversation_history: Optional[list[dict[str, Any]]],
+) -> str:
+    """
+    Expand short follow-up prompts with the previous user turn for continuity.
+    """
+    text = (message or "").strip()
+    if not text or not conversation_history:
+        return text
+
+    # Most sufficiently specific prompts should pass through unchanged.
+    if len(text.split()) >= 7 and not _FOLLOWUP_PATTERN.search(text):
+        return text
+
+    last_user = ""
+    for turn in reversed(conversation_history):
+        if str(turn.get("role", "")).lower() == "user":
+            last_user = str(turn.get("content", "")).strip()
+            if last_user:
+                break
+
+    if not last_user:
+        return text
+
+    if text.lower() == last_user.lower():
+        return text
+
+    return f"{last_user}. Follow-up: {text}"
 
 
 # ── rule-based response templates ────────────────────────────────────────────
@@ -169,6 +205,7 @@ class DialogueManager:
         self,
         message: str,
         twin: DigitalTwin,
+        conversation_history: Optional[list[dict[str, Any]]] = None,
         recent_triggers: list[str] | None = None,
         *,
         include_simulation: bool = False,
@@ -187,8 +224,9 @@ class DialogueManager:
             "ts": str,
           }
         """
-        intent = _detect_intent(message)
-        response_text = _rule_based_response(message, twin)
+        contextual_message = _contextualize_message(message, conversation_history)
+        intent = _detect_intent(contextual_message)
+        response_text = _rule_based_response(contextual_message, twin)
 
         return {
             "role": "twin",
