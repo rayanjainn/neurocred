@@ -8,8 +8,11 @@ const spaceGrotesk = Space_Grotesk({ subsets: ['latin'], variable: '--font-body'
 const jetBrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-data', weight: ['400'] })
 
 export const metadata: Metadata = {
-  title: 'Nexus — Financial Intelligence',
-  description: 'Agentic AI Financial Intelligence Platform for MSMEs',
+  title: 'NeuroCred',
+  description: 'Agentic AI Financial Intelligence Platform for Individuals',
+  icons: {
+    icon: '/logo.svg',
+  }
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
