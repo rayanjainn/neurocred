@@ -201,6 +201,8 @@ async def run_scoring_saga(
                 "risk_band":                        result["risk_band"],
                 "recommended_personal_loan_amount": str(result["recommended_personal_loan_amount"]),
                 "daily_avg_throughput_30d":         str(fv.daily_avg_throughput_30d),
+                "shap_top5":                         json.dumps(top5),
+                "shap_waterfall":                    json.dumps(waterfall),
                 "refreshed_at":                     datetime.now(timezone.utc).isoformat(),
             },
         )

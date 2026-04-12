@@ -2815,6 +2815,59 @@ async def get_individual_score(user_id: str, request: Request) -> dict[str, Any]
         f"Vigilance deception confidence is {round((1.0 - comp_network) * 100.0, 1)}%, feeding the network safety component.",
     ]
 
+    # Fetch real ML-driven explainability from Redis (populated by scoring_worker)
+    user_credit_data = await redis.hgetall(f"credit:user:{user_id}")
+    real_top5 = []
+    real_waterfall = []
+    if user_credit_data:
+        try:
+            # Handle both bytes (Redis standard) and strings
+            raw_t5 = user_credit_data.get(b"shap_top5", user_credit_data.get("shap_top5", b"[]"))
+            raw_wf = user_credit_data.get(b"shap_waterfall", user_credit_data.get("shap_waterfall", b"[]"))
+            
+            t5_str = raw_t5.decode("utf-8") if isinstance(raw_t5, bytes) else raw_t5
+            wf_str = raw_wf.decode("utf-8") if isinstance(raw_wf, bytes) else raw_wf
+            
+            real_top5 = json.loads(t5_str)
+            raw_wf_data = json.loads(wf_str)
+            if isinstance(raw_wf_data, dict) and "contributions" in raw_wf_data:
+                real_waterfall = raw_wf_data["contributions"]
+            elif isinstance(raw_wf_data, list):
+                real_waterfall = raw_wf_data
+        except Exception as e:
+            _log.warning(f"Error parsing real SHAP for {user_id}: {e}")
+
+    # Dynamic Reasons using Trigger Engine or Real SHAP
+    final_reasons = []
+    if real_top5:
+        final_reasons = [f"{f['feature_name'].replace('_', ' ').title()} is a primary factor" for f in real_top5[:3]]
+    elif twin:
+        from src.intervention.trigger_engine import evaluate_triggers
+        # Use previous volatility if available for QoQ triggers
+        prev_vol = None
+        if len(getattr(twin, "risk_history", [])) > 1:
+            prev_vol = twin.spending_volatility # Approximation
+        
+        triggers = evaluate_triggers(twin, prev_spending_volatility=prev_vol)
+        final_reasons = [t.reason for t in triggers[:3]]
+    
+    if not final_reasons:
+        # Last resort fallback (still based on data, just formatted strings)
+        final_reasons = [
+            "Strong liquidity with over 15 days of cash buffer." if comp_liquidity > 0.6 else "Maintaining a larger cash buffer could further improve resilience.",
+            "High network trust score with no deceptive patterns detected." if comp_network > 0.85 else "Strengthening counterparty trust networks would benefit your profile.",
+            "Stable income profile over the last 6 months." if income_trend == "stable" or income_trend == "rising" else "Increasing income stability would positively impact your health score.",
+        ]
+
+    # Dynamic Waterfall
+    final_waterfall = real_waterfall if real_waterfall else [
+        {"feature": "Credit Strength", "abs_magnitude": round(weights["credit"] * comp_credit, 4), "sign": 1},
+        {"feature": "Liquidity", "abs_magnitude": round(weights["liquidity"] * comp_liquidity, 4), "sign": 1},
+        {"feature": "Stability", "abs_magnitude": round(weights["stability"] * comp_stability, 4), "sign": 1},
+        {"feature": "Behavior", "abs_magnitude": round(weights["behavior"] * comp_behavior, 4), "sign": 1},
+        {"feature": "Network", "abs_magnitude": round(weights["network"] * comp_network, 4), "sign": 1},
+    ]
+
     return {
         "user_id": user_id,
         "status": "complete",
@@ -2828,18 +2881,8 @@ async def get_individual_score(user_id: str, request: Request) -> dict[str, Any]
         "upi_transaction_count_30d": int(_to_float(feat_row.get("upi_transaction_count_30d"), upi_txn_count_30d)),
         "debit_credit_ratio": round(debit_credit_ratio, 4),
         "credit_card_utilisation_pct": round(credit_utilisation, 2),
-        "top_reasons": [
-            "Strong liquidity with over 15 days of cash buffer." if comp_liquidity > 0.6 else "Maintaining a larger cash buffer could further improve resilience.",
-            "High network trust score with no deceptive patterns detected." if comp_network > 0.85 else "Strengthening counterparty trust networks would benefit your profile.",
-            "Stable income profile over the last 6 months." if income_trend == "stable" or income_trend == "rising" else "Increasing income stability would positively impact your health score.",
-        ],
-        "shap_waterfall": [
-            {"feature": "Credit Strength", "abs_magnitude": weights["credit"] * comp_credit, "sign": 1},
-            {"feature": "Liquidity", "abs_magnitude": weights["liquidity"] * comp_liquidity, "sign": 1},
-            {"feature": "Stability", "abs_magnitude": weights["stability"] * comp_stability, "sign": 1},
-            {"feature": "Behavior", "abs_magnitude": weights["behavior"] * comp_behavior, "sign": 1},
-            {"feature": "Network", "abs_magnitude": weights["network"] * comp_network, "sign": 1},
-        ],
+        "top_reasons": final_reasons,
+        "shap_waterfall": final_waterfall,
         "top_spending_categories": top_spending_categories,
         "income_trend": income_trend,
         "insights": insights,
