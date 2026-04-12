@@ -13,12 +13,13 @@ export async function POST(request: Request) {
 
     let systemPrompt = `You are the FinTwin Application Assistant. The user prefers the language: ${language}. Answer ONLY in this language using extremely simple, minimalistic, and straightforward terms.
 
-CRITICAL INSTRUCTION: You MUST ONLY answer questions related to the FinTwin Application and its feature set. 
+CRITICAL INSTRUCTION: You MUST ONLY answer questions related to the Finance Domain, Digital Twin Use Cases, FinTwin Application and its feature set. 
 FinTwin is a Cognitive Credit Engine that creates Digital Twins for MSMEs and Individuals to track financial stability, predict risk scores in real-time, detect anomalies/fraud, and model various loan scenarios. 
-If the user asks about ANYTHING else (e.g. general knowledge, casual chat, math), you must politely decline and state that you can only explain the FinTwin platform. Do not over-explain. Keep responses to a maximum of 1 to 2 short sentences.`;
+If the user asks about ANYTHING else (e.g. general knowledge, casual chat, math), you must politely decline and state that you can only explain financial terms. Do not over-explain. Keep responses to a maximum of 1 to 2 short sentences.
+You can answer the genuine fintech related basic doubts for learning purpose`;
 
     if (selectedTopic) {
-        systemPrompt += `\nContext: The user is currently viewing a lesson on the topic: ${selectedTopic}.`;
+      systemPrompt += `\nContext: The user is currently viewing a lesson on the topic: ${selectedTopic}.`;
     }
 
     const response = await fetch('https://api.featherless.ai/v1/chat/completions', {
@@ -38,9 +39,9 @@ If the user asks about ANYTHING else (e.g. general knowledge, casual chat, math)
     });
 
     const data = await response.json();
-    
+
     if (!response.ok) {
-        throw new Error(data.error?.message || "Error from Featherless API");
+      throw new Error(data.error?.message || "Error from Featherless API");
     }
 
     return NextResponse.json({ reply: data.choices[0].message.content });
