@@ -5,10 +5,11 @@ import { cn } from "@/dib/utils";
 
 type TwinEnergyAuraProps = {
   avatarLabel?: string;
+  avatarSeed?: string | null;
   className?: string;
 };
 
-export function TwinEnergyAura({ avatarLabel = "P", className }: TwinEnergyAuraProps) {
+export function TwinEnergyAura({ avatarLabel = "P", avatarSeed, className }: TwinEnergyAuraProps) {
   return (
     <motion.div
       className={cn("relative w-40 h-40 flex items-center justify-center", className)}
@@ -82,8 +83,16 @@ export function TwinEnergyAura({ avatarLabel = "P", className }: TwinEnergyAuraP
         transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      <div className="relative z-10 h-14 w-14 rounded-full border border-white/30 bg-black/35 backdrop-blur-md text-cyan-200 font-semibold flex items-center justify-center shadow-[0_0_18px_rgba(34,211,238,0.35)]">
-        {avatarLabel}
+      <div className="relative z-10 h-14 w-14 rounded-full border border-white/30 bg-black/35 shadow-inner backdrop-blur-md text-cyan-200 font-semibold flex items-center justify-center shadow-[0_0_18px_rgba(34,211,238,0.35)] overflow-hidden">
+        {avatarSeed ? (
+          <img 
+            src={`https://api.dicebear.com/9.x/notionists/svg?seed=${avatarSeed}`} 
+            alt="Twin Avatar" 
+            className="w-full h-full bg-slate-50 object-cover scale-[1.5]" 
+          />
+        ) : (
+          avatarLabel
+        )}
       </div>
     </motion.div>
   );

@@ -64,6 +64,7 @@ const NAV_ITEMS: Record<
     { label: "Financial Report", href: "/individual/report", icon: FileText },
     { label: "Guard AI", href: "/individual/vigilance", icon: Shield },
     { label: "My Digital Twin", href: "/individual/twin", icon: GitBranch },
+    { label: "Edit Profile", href: "/individual/edit-profile", icon: Settings },
   ],
   msme: [
     { label: "Dashboard", href: "/msme/dashboard", icon: LayoutDashboard },
@@ -74,6 +75,7 @@ const NAV_ITEMS: Record<
     { label: "Strategy Lab", href: "/msme/strategy-lab", icon: Compass },
     { label: "Business Twin", href: "/msme/twin", icon: GitBranch },
     { label: "Guide", href: "/msme/guide", icon: HelpCircle },
+    { label: "Edit Profile", href: "/msme/edit-profile", icon: Settings },
   ],
   loan_officer: [
     { label: "Loan Queue", href: "/bank/loan-queue", icon: ListChecks },
@@ -125,6 +127,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifVisible, setNotifVisible] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [profileImageSeed, setProfileImageSeed] = useState<string | null>(null);
   const mainRef = useRef<HTMLElement>(null);
   const notifPanelRef = useRef<HTMLDivElement>(null);
 
@@ -177,6 +180,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (stored === "1") {
       setSidebarCollapsed(true);
     }
+    
+    // Load profile image seed directly
+    const loadProfileImage = () => {
+      setProfileImageSeed(window.localStorage.getItem("profileImageSeed"));
+    };
+    loadProfileImage();
+    window.addEventListener("profileImageUpdated", loadProfileImage);
+    return () => window.removeEventListener("profileImageUpdated", loadProfileImage);
   }, []);
 
   useEffect(() => {
@@ -516,8 +527,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     size="sm"
                     className="rounded-full gap-2 px-3"
                   >
-                    <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex flex-row items-center justify-center shrink-0 shadow-sm border border-primary/20">
-                      {user.name.charAt(0)}
+                    <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex flex-row items-center justify-center shrink-0 shadow-sm border border-primary/20 overflow-hidden">
+                      {profileImageSeed ? (
+                        <img 
+                          src={`https://api.dicebear.com/9.x/notionists/svg?seed=${profileImageSeed}`} 
+                          alt="Profile" 
+                          className="w-full h-full object-cover scale-[1.5]" 
+                        />
+                      ) : (
+                        user.name.charAt(0)
+                      )}
                     </div>
                     <div className="hidden sm:flex items-center shrink-0 mx-1">
                       <span className="hidden sm:block text-sm font-medium tracking-tight">

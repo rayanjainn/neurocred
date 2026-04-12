@@ -49,6 +49,7 @@ const RISK_STYLES = {
   const risk = RISK_STYLES[twin.riskLevel] || RISK_STYLES.medium;
   const [isVoiceModalOpen, setIsVoiceModalOpen] = useState(false);
   const [isCalling, setIsCalling] = useState(false);
+  const [profileImageSeed, setProfileImageSeed] = useState<string | null>(null);
   const { toast } = useToast();
 
   const handleStartCall = async () => {
@@ -104,16 +105,23 @@ const RISK_STYLES = {
       }
     };
 
+    const loadProfileImage = () => {
+      setProfileImageSeed(window.localStorage.getItem("profileImageSeed"));
+    };
+    
     consumePending();
+    loadProfileImage();
 
     window.addEventListener("voice:open-digital-twin", openTwin);
     window.addEventListener("voice:open-twin-chat", openTwin);
     window.addEventListener("voice:ui-action", handleUiAction);
+    window.addEventListener("profileImageUpdated", loadProfileImage);
 
     return () => {
       window.removeEventListener("voice:open-digital-twin", openTwin);
       window.removeEventListener("voice:open-twin-chat", openTwin);
       window.removeEventListener("voice:ui-action", handleUiAction);
+      window.removeEventListener("profileImageUpdated", loadProfileImage);
     };
   }, []);
 
@@ -144,7 +152,7 @@ const RISK_STYLES = {
         </div>
 
         <div className="flex justify-center">
-          <TwinEnergyAura avatarLabel={twin.name.charAt(0).toUpperCase()} className={risk.ring} />
+          <TwinEnergyAura avatarLabel={twin.name.charAt(0).toUpperCase()} avatarSeed={profileImageSeed} className={risk.ring} />
         </div>
 
         <div className="rounded-lg border border-white/15 bg-black/20 p-3">

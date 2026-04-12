@@ -24,6 +24,7 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
   const [transcript, setTranscript] = useState("");
   const [response, setResponse] = useState("");
   const [chatInput, setChatInput] = useState("");
+  const [profileImageSeed, setProfileImageSeed] = useState<string | null>(null);
   const recognitionRef = useRef<any>(null);
   const synthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
   const lastSpokenRef = useRef("");
@@ -59,11 +60,18 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
       }
     }
 
+    const loadProfileImage = () => {
+      setProfileImageSeed(window.localStorage.getItem("profileImageSeed"));
+    };
+    loadProfileImage();
+    window.addEventListener("profileImageUpdated", loadProfileImage);
+
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
       window.speechSynthesis?.cancel();
+      window.removeEventListener("profileImageUpdated", loadProfileImage);
     };
   }, []);
 
@@ -303,6 +311,7 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
               <div className="relative flex justify-center py-2 h-32 items-center">
                 <TwinEnergyAura
                   avatarLabel={twinName.charAt(0)}
+                  avatarSeed={profileImageSeed}
                   className={cn(
                     "transition-all duration-500 ease-out",
                     isSpeaking ? "scale-[1.15] ring-lime-400/80 shadow-[0_0_50px_rgba(163,230,53,0.5)]" : "ring-lime-400/40",
