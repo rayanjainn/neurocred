@@ -28,8 +28,7 @@ import {
   MOCK_USERS,
 } from "@/dib/mockData";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api";
-console.log("API_BASE:", API_BASE);
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://10.10.43.20:8001";
 const USE_MOCK = false; // Forced to false to completely disable mock pipeline
 const MOCK_DELAY_MS = Number(process.env.NEXT_PUBLIC_MOCK_DELAY_MS ?? 120);
 

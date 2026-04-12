@@ -1,5 +1,5 @@
 /** @type {import('next').NextConfig} */
-const backendTarget = process.env.API_PROXY_TARGET || "http://127.0.0.1:8001";
+const backendTarget = process.env.API_PROXY_TARGET || "http://10.10.43.20:8001";
 
 const nextConfig = {
   typescript: {

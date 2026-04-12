@@ -18,6 +18,15 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Lock, CheckCircle2, XCircle, AlertTriangle, Loader2 } from "lucide-react";
 
+const SHAP_FEATURE_WHITELIST = [
+  "gst_filing_compliance_rate",
+  "months_active_gst",
+  "statutory_payment_regularity_score",
+  "hsn_entropy_90d",
+  "gst_30d_value",
+  "ewb_30d_value",
+] as const;
+
 function fmtINR(n: number) {
   if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
   if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
@@ -138,7 +147,13 @@ export default function BankMsmePage() {
     );
   }
 
-  const shap = score?.shap_waterfall ?? [];
+  const shap = (score?.shap_waterfall ?? [])
+    .filter((s: any) => SHAP_FEATURE_WHITELIST.includes(s.feature_name))
+    .sort(
+      (a: any, b: any) =>
+        SHAP_FEATURE_WHITELIST.indexOf(a.feature_name) -
+        SHAP_FEATURE_WHITELIST.indexOf(b.feature_name),
+    );
   const maxShap = shap.length > 0 ? Math.max(...shap.map((s: any) => s.abs_magnitude)) : 1;
 
   return (

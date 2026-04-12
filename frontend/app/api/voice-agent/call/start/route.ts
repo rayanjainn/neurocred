@@ -4,11 +4,11 @@ function resolveBackendBase(): string {
   const raw =
     process.env.BACKEND_API_URL ||
     process.env.NEXT_PUBLIC_API_URL ||
-    "http://localhost:8001";
+    "http://10.10.43.20:8001";
 
   const value = raw.trim();
   if (!value || value.startsWith("/")) {
-    return "http://localhost:8001";
+    return "http://10.10.43.20:8001";
   }
   return value.replace(/\/$/, "");
 }

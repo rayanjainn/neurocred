@@ -475,7 +475,295 @@ export default function MsmeTwinPage() {
     } finally { setGenerating(false); }
   };
 
-  const exportPdf = () => window.print();
+  const exportPdf = () => {
+    const escapeHtml = (value: unknown) =>
+      String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+
+    const historyRows = chartData
+      .slice()
+      .reverse()
+      .slice(0, 12)
+      .map(
+        (v) => `
+          <tr>
+            <td>${escapeHtml(v.ver)}</td>
+            <td>${escapeHtml(v.persona)}</td>
+            <td>${escapeHtml(`${v.risk}%`)}</td>
+            <td>${escapeHtml(String(v.cibil ?? "-"))}</td>
+            <td>${escapeHtml(fmtTs(v.ts))}</td>
+          </tr>
+        `,
+      )
+      .join("");
+
+    const triggerRows = (triggers || [])
+      .slice(0, 20)
+      .map(
+        (t: any) => `
+          <tr>
+            <td>${escapeHtml(t.trigger_id ?? t.name ?? "Alert")}</td>
+            <td>${escapeHtml(t.severity ?? "low")}</td>
+            <td>${escapeHtml(t.message ?? t.description ?? "")}</td>
+          </tr>
+        `,
+      )
+      .join("");
+
+    const cotRows = (cotSteps || [])
+      .slice(0, 20)
+      .map(
+        (s: any, i: number) => `
+          <tr>
+            <td>T${i + 1}</td>
+            <td>${escapeHtml(s.title ?? s.step ?? "Step")}</td>
+            <td>${escapeHtml(
+              s.content ?? s.reasoning ?? s.thought ?? JSON.stringify(s),
+            )}</td>
+          </tr>
+        `,
+      )
+      .join("");
+
+    const simulationSummary = simResult
+      ? `
+        <ul>
+          <li><strong>Scenario:</strong> ${escapeHtml(scenario.replace(/_/g, " "))}</li>
+          <li><strong>Risk Delta:</strong> ${escapeHtml(
+              riskDelta !== undefined
+                ? `${riskDelta > 0 ? "+" : ""}${(riskDelta * 100).toFixed(1)}%`
+                : "-",
+            )}</li>
+          <li><strong>New Credit Limit:</strong> ${escapeHtml(newLimit ? fmtINR(newLimit) : "-")}</li>
+          <li><strong>EWS:</strong> ${escapeHtml(ews.level ?? ews.status ?? "-")}</li>
+        </ul>
+      `
+      : "<p>No simulation run in this session.</p>";
+
+    const buildLineChartSvg = (
+      points: Array<{ xLabel: string; value: number }>,
+      stroke: string,
+      yMax = 100,
+    ) => {
+      if (!points.length) return "";
+      const width = 880;
+      const height = 250;
+      const padL = 42;
+      const padR = 16;
+      const padT = 14;
+      const padB = 28;
+      const innerW = width - padL - padR;
+      const innerH = height - padT - padB;
+      const x = (i: number) =>
+        points.length === 1 ? padL + innerW / 2 : padL + (i / (points.length - 1)) * innerW;
+      const y = (v: number) => padT + (1 - Math.max(0, Math.min(v, yMax)) / yMax) * innerH;
+
+      const polyline = points.map((p, i) => `${x(i)},${y(p.value)}`).join(" ");
+      const dots = points
+        .map((p, i) => `<circle cx="${x(i)}" cy="${y(p.value)}" r="2.5" fill="${stroke}" />`)
+        .join("");
+      const xLabelStep = Math.max(1, Math.floor(points.length / 5));
+      const xLabels = points
+        .map((p, i) => {
+          if (!(i === 0 || i === points.length - 1 || i % xLabelStep === 0)) return "";
+          return `<text x="${x(i)}" y="${height - 8}" text-anchor="middle" font-size="10" fill="#6b7280">${escapeHtml(p.xLabel)}</text>`;
+        })
+        .join("");
+      const yTicks = [0, 25, 50, 75, 100]
+        .map(
+          (tick) => `
+            <line x1="${padL}" y1="${y(tick)}" x2="${width - padR}" y2="${y(tick)}" stroke="#e5e7eb" stroke-width="1" />
+            <text x="${padL - 8}" y="${y(tick) + 3}" text-anchor="end" font-size="10" fill="#6b7280">${tick}</text>
+          `,
+        )
+        .join("");
+
+      return `
+        <svg viewBox="0 0 ${width} ${height}" class="chart-svg" role="img" aria-label="Line chart">
+          ${yTicks}
+          <line x1="${padL}" y1="${height - padB}" x2="${width - padR}" y2="${height - padB}" stroke="#9ca3af" stroke-width="1" />
+          <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${height - padB}" stroke="#9ca3af" stroke-width="1" />
+          <polyline fill="none" stroke="${stroke}" stroke-width="2.5" points="${polyline}" />
+          ${dots}
+          ${xLabels}
+        </svg>
+      `;
+    };
+
+    const timelineChartSvg = buildLineChartSvg(
+      chartData.slice(-12).map((p: any, idx: number) => ({ xLabel: p.ver || `v${idx + 1}`, value: Number(p.risk ?? 0) })),
+      "#ef4444",
+    );
+
+    const simulationChartSvg = fanChart.length
+      ? buildLineChartSvg(
+          fanChart.slice(0, 12).map((p: any, idx: number) => ({
+            xLabel: String(p.month ?? idx + 1),
+            value: Number(p.p50 ?? p.value ?? 0),
+          })),
+          "#0ea5e9",
+        )
+      : "";
+
+    const printableHtml = `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <title>Business Twin Report</title>
+          <style>
+            * { box-sizing: border-box; }
+            html, body {
+              margin: 0;
+              padding: 0;
+              background: #ffffff !important;
+              color: #111111 !important;
+              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
+            }
+            .page { padding: 20px; }
+            h1 { margin: 0 0 6px; font-size: 22px; color: #111111 !important; }
+            h2 { margin: 22px 0 10px; font-size: 15px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; color: #111111 !important; }
+            p, li { font-size: 12px; line-height: 1.5; }
+            .meta { color: #444; margin-bottom: 12px; }
+            .topline {
+              display: flex;
+              justify-content: space-between;
+              gap: 12px;
+              align-items: center;
+              border-bottom: 2px solid #111111;
+              padding-bottom: 8px;
+              margin-bottom: 14px;
+            }
+            .brand {
+              font-size: 11px;
+              letter-spacing: 0.08em;
+              text-transform: uppercase;
+              color: #374151;
+              font-weight: 700;
+            }
+            .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+            .card { border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; }
+            .label { font-size: 11px; color: #4b5563; }
+            .value { font-size: 16px; font-weight: 700; margin-top: 4px; color: #111111 !important; }
+            table { width: 100%; border-collapse: collapse; }
+            th, td { border: 1px solid #d1d5db; padding: 6px 8px; text-align: left; font-size: 11px; vertical-align: top; }
+            th { background: #f3f4f6; font-weight: 700; }
+            .empty { color: #6b7280; font-style: italic; }
+            .chart-wrap {
+              border: 1px solid #d1d5db;
+              border-radius: 8px;
+              padding: 8px;
+              margin: 8px 0 10px;
+              background: #ffffff;
+            }
+            .chart-title {
+              font-size: 11px;
+              font-weight: 700;
+              color: #111111;
+              margin-bottom: 6px;
+            }
+            .chart-svg {
+              width: 100%;
+              height: auto;
+              display: block;
+            }
+            .footer {
+              margin-top: 16px;
+              font-size: 10px;
+              color: #6b7280;
+              border-top: 1px solid #e5e7eb;
+              padding-top: 8px;
+            }
+            tr { page-break-inside: avoid; }
+            section { page-break-inside: avoid; }
+            @page { size: A4; margin: 12mm; }
+          </style>
+        </head>
+        <body>
+          <main class="page">
+            <div class="topline">
+              <h1>Business Digital Twin Report</h1>
+              <span class="brand">AIRAVAT Intelligence</span>
+            </div>
+            <p class="meta">Generated: ${escapeHtml(new Date().toLocaleString("en-IN"))}</p>
+            <p class="meta">Business: ${escapeHtml(user?.name)} | GSTIN: ${escapeHtml(user?.gstin)} | User ID: ${escapeHtml(user?.id)}</p>
+
+            <section>
+              <h2>Snapshot</h2>
+              <div class="grid">
+                <div class="card"><div class="label">Credit Score</div><div class="value">${escapeHtml(String(score?.credit_score ?? "-"))}</div></div>
+                <div class="card"><div class="label">Risk Band</div><div class="value">${escapeHtml(String(score?.risk_band ?? "-").replace(/_/g, " "))}</div></div>
+                <div class="card"><div class="label">Twin Risk Score</div><div class="value">${escapeHtml(twin ? `${Math.round((twin.risk_score ?? 0) * 100)}%` : "-")}</div></div>
+                <div class="card"><div class="label">Recommended WC</div><div class="value">${escapeHtml(score?.recommended_wc_amount ? fmtINR(score.recommended_wc_amount) : "-")}</div></div>
+              </div>
+            </section>
+
+            <section>
+              <h2>Twin Timeline (Latest 12)</h2>
+              ${timelineChartSvg ? `<div class="chart-wrap"><p class="chart-title">Twin Risk Trend</p>${timelineChartSvg}</div>` : ""}
+              ${historyRows ? `<table><thead><tr><th>Version</th><th>Persona</th><th>Risk</th><th>CIBIL-Like</th><th>Timestamp</th></tr></thead><tbody>${historyRows}</tbody></table>` : `<p class="empty">No twin history available.</p>`}
+            </section>
+
+            <section>
+              <h2>Risk Alerts</h2>
+              ${triggerRows ? `<table><thead><tr><th>Alert</th><th>Severity</th><th>Message</th></tr></thead><tbody>${triggerRows}</tbody></table>` : `<p class="empty">No risk alerts available.</p>`}
+            </section>
+
+            <section>
+              <h2>AI Reasoning</h2>
+              ${cotRows ? `<table><thead><tr><th>Step</th><th>Title</th><th>Reasoning</th></tr></thead><tbody>${cotRows}</tbody></table>` : `<p class="empty">No reasoning trace available.</p>`}
+            </section>
+
+            <section>
+              <h2>Scenario Simulation</h2>
+              ${simulationChartSvg ? `<div class="chart-wrap"><p class="chart-title">Projected Scenario Curve (P50)</p>${simulationChartSvg}</div>` : ""}
+              ${simulationSummary}
+            </section>
+
+            <p class="footer">Generated by AIRAVAT Business Twin Module. This report is intended for credit monitoring and internal risk analysis.</p>
+          </main>
+        </body>
+      </html>
+    `;
+
+    const iframe = document.createElement("iframe");
+    iframe.style.position = "fixed";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.width = "0";
+    iframe.style.height = "0";
+    iframe.style.border = "0";
+    document.body.appendChild(iframe);
+
+    const frameDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!frameDoc || !iframe.contentWindow) {
+      document.body.removeChild(iframe);
+      window.print();
+      return;
+    }
+
+    frameDoc.open();
+    frameDoc.write(printableHtml);
+    frameDoc.close();
+
+    const cleanup = () => {
+      if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+    };
+
+    iframe.contentWindow.onafterprint = cleanup;
+    setTimeout(() => {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+      setTimeout(cleanup, 1200);
+    }, 200);
+  };
 
   if (!user || user.role !== "msme") return null;
 

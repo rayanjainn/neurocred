@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth, type Role } from "@/dib/authContext";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [demoUsers, setDemoUsers] = useState<any[]>([]);
+  const demoScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     usersApi.list().then(data => {
@@ -82,6 +83,14 @@ export default function LoginPage() {
   const quickLogin = (uEmail: string) => {
     setEmail(uEmail);
     setPassword("demo");
+  };
+
+  const handleDemoWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    const el = demoScrollRef.current;
+    if (!el || el.scrollHeight <= el.clientHeight) return;
+    e.preventDefault();
+    e.stopPropagation();
+    el.scrollTop += e.deltaY;
   };
 
   return (
@@ -184,7 +193,12 @@ export default function LoginPage() {
                   <p className="text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold text-center mb-4">
                     Quick Demo Access
                   </p>
-                  <div className="grid grid-cols-1 gap-2 max-h-[220px] overflow-y-auto pr-1 custom-scrollbar">
+                  <div
+                    ref={demoScrollRef}
+                    className="grid grid-cols-1 gap-2 max-h-[220px] overflow-y-scroll overscroll-contain touch-pan-y pr-1 custom-scrollbar"
+                    style={{ scrollbarGutter: "stable", WebkitOverflowScrolling: "touch" }}
+                    onWheel={handleDemoWheel}
+                  >
                     {demoUsers.length === 0 ? (
                        <div className="flex flex-col items-center justify-center p-8 border border-dashed border-white/10 rounded-xl space-y-2 text-white/30">
                           <Loader2 className="w-5 h-5 animate-spin" />
