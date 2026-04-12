@@ -72,6 +72,7 @@ class TwinSnapshot:
     cash_buffer_days: float     = 14.0
     emi_monthly: float          = 15000.0
     emi_overdue_count: int      = 0
+    debit_failure_rate: float   = 0.0
     cash_balance_current: float = 40000.0
     cascade_susceptibility: float = 0.45
     persona: str                = "unknown"
@@ -149,7 +150,7 @@ def run_simulation(req: SimulationRequest) -> dict[str, Any]:
     initial_regime = classify_regime(
         twin.cash_buffer_days,
         twin.emi_monthly / max(twin.income_monthly, 1.0),
-        0.0,   # debit_failure_rate — not in twin snapshot
+        max(0.0, min(1.0, twin.debit_failure_rate)),
         twin.emi_overdue_count,
     )
 
@@ -261,7 +262,9 @@ def run_simulation(req: SimulationRequest) -> dict[str, Any]:
             cash_paths[k, t] = cash
 
     # ── Tail risk ─────────────────────────────────────────────────────────────
-    default_thresh = -overdraft_limit
+    # Operational default should trigger before the hard overdraft floor is exhausted.
+    # Using only -overdraft_limit makes default probabilities unrealistically flat at zero.
+    default_thresh = min(0.0, -0.25 * overdraft_limit)
     var_95, cvar_95 = compute_var_cvar(cash_paths, twin.cash_balance_current)
     dp = default_probability(cash_paths, default_thresh)
 

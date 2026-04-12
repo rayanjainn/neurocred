@@ -21,6 +21,7 @@ from src.twin.twin_model import DigitalTwin
 
 TriggerType = Literal[
     "liquidity_drop",
+    "prequalified_micro_loan_offer",
     "overspend_warning",
     "emi_at_risk",
     "lifestyle_inflation",
@@ -33,6 +34,7 @@ Priority = Literal["HIGH", "MEDIUM", "LOW"]
 
 _TRIGGER_PRIORITY: dict[TriggerType, Priority] = {
     "liquidity_drop": "HIGH",
+    "prequalified_micro_loan_offer": "HIGH",
     "emi_at_risk": "HIGH",
     "fraud_anomaly": "HIGH",
     "overspend_warning": "MEDIUM",
@@ -43,6 +45,7 @@ _TRIGGER_PRIORITY: dict[TriggerType, Priority] = {
 
 _TRIGGER_CHANNELS: dict[TriggerType, list[str]] = {
     "liquidity_drop": ["sms", "push"],
+    "prequalified_micro_loan_offer": ["push"],
     "emi_at_risk": ["sms", "push"],
     "fraud_anomaly": ["push", "sms"],
     "overspend_warning": ["push"],
@@ -90,6 +93,23 @@ def evaluate_triggers(
                 "Review non-essential subscriptions",
                 "Defer discretionary spends for 7 days",
                 "Consider a short-term liquidity buffer via pre-qualified credit",
+            ],
+        ))
+
+    if twin.liquidity_health == "LOW" and twin.cash_buffer_days < 7.0:
+        results.append(TriggerResult(
+            trigger_type="prequalified_micro_loan_offer",
+            fired=True,
+            priority="HIGH",
+            channels=_TRIGGER_CHANNELS["prequalified_micro_loan_offer"],
+            urgency=min(0.98, 0.75 + (7.0 - twin.cash_buffer_days) * 0.03),
+            reason=(
+                f"Liquidity dropped to {twin.cash_buffer_days:.1f} days. "
+                "Pre-qualified micro-loan offer is recommended proactively."
+            ),
+            suggested_actions=[
+                "Review pre-qualified micro-loan options",
+                "Choose preferred EMI tenure and start date",
             ],
         ))
 

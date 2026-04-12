@@ -1539,6 +1539,54 @@ async def _get_stream_transactions(request: Request, identifier: str, limit: int
     return upi_results, ewb_results
 
 
+async def _get_twin_timeline_from_stream(request: Request, identifier: str, limit: int = 20000) -> list[dict]:
+    """Read twin snapshot timeline events from Redis stream and aggregate latest risk per day."""
+    redis = request.app.state.redis
+    target_ids = _resolve_entity_ids(identifier)
+    stream_key = getattr(settings, "stream_twin_timeline", "stream:twin_timeline")
+
+    try:
+        rows = await redis.xrevrange(stream_key, "+", "-", count=limit)
+    except Exception as e:
+        _log.warning(f"[PIPELINE] TWIN_TIMELINE_STREAM_READ_ERROR {stream_key}: {e}")
+        return []
+
+    # xrevrange yields newest-first; keep first event per day to get latest daily state.
+    by_day: dict[str, dict] = {}
+    for stream_id, fields in rows:
+        user_id = str(fields.get("user_id", ""))
+        if user_id not in target_ids:
+            continue
+
+        ts = str(fields.get("ts") or fields.get("timestamp") or stream_id)
+        day = ts[:10]
+        if not day:
+            continue
+
+        if day in by_day:
+            continue
+
+        try:
+            risk_score = float(fields.get("risk_score", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            risk_score = 0.0
+
+        try:
+            version = int(float(fields.get("version", 0) or 0))
+        except (TypeError, ValueError):
+            version = 0
+
+        by_day[day] = {
+            "date": day,
+            "timestamp": ts,
+            "risk_score": max(0.0, min(1.0, risk_score)),
+            "version": version,
+        }
+
+    timeline = sorted(by_day.values(), key=lambda x: x["date"])
+    return timeline
+
+
 def _build_daily_timeline_from_stream(upi_txns: list[dict], ewb_txns: list[dict], days: int = 365) -> list[dict]:
     """Aggregate stream transactions to daily points for timeline charts."""
     by_day: dict[str, dict[str, float]] = {}
@@ -1636,6 +1684,7 @@ async def get_explorer_details(gstin: str, request: Request) -> dict[str, Any]:
 
     # Fetch real event data from Redis stream (Tier 2 typed events).
     upi_txns, ewb_txns = await _get_stream_transactions(request, gstin, limit=60_000)
+    twin_timeline = await _get_twin_timeline_from_stream(request, gstin, limit=60_000)
     timeline = _build_daily_timeline_from_stream(upi_txns, ewb_txns, days=365)
     
     return {
@@ -1649,6 +1698,7 @@ async def get_explorer_details(gstin: str, request: Request) -> dict[str, Any]:
                           "daily_count": t["daily_count"]} for t in timeline],
         "ewb_timeline": [{"date": t["date"], "daily_ewb_volume": t["daily_ewb_volume"],
                           "daily_ewb_count": t["daily_ewb_count"]} for t in timeline],
+        "twin_timeline": twin_timeline,
         "windows": {
             "w30": window_agg(timeline, 30),
             "w60": window_agg(timeline, 60),

@@ -17,6 +17,16 @@ interface TimeSeriesPoint {
   date: string;
   volume?: number;
   count?: number;
+  daily_volume?: number;
+  daily_count?: number;
+  daily_ewb_volume?: number;
+  daily_ewb_count?: number;
+}
+
+interface TwinTimelinePoint {
+  date: string;
+  risk_score: number;
+  version?: number;
 }
 
 interface WindowAgg {
@@ -31,6 +41,7 @@ interface WindowAgg {
 interface Props {
   upiTimeline: TimeSeriesPoint[];
   ewbTimeline?: TimeSeriesPoint[];
+  twinTimeline?: TwinTimelinePoint[];
   windows?: { w30?: WindowAgg; w60?: WindowAgg; w90?: WindowAgg; w365?: WindowAgg };
   scoreHistory?: { date: string; score: number; risk_band?: string; delta?: number }[];
   title?: string;
@@ -45,13 +56,13 @@ function fmtINR(n: number) {
   return String(n);
 }
 
-function sliceByDays(data: TimeSeriesPoint[], days: number): TimeSeriesPoint[] {
+function sliceByDays<T extends { date: string }>(data: T[], days: number): T[] {
   // data is sorted oldest-first; take the last `days` entries
   return data.slice(-days);
 }
 
 // Downsample large arrays for performance (max ~60 points per chart)
-function downsample(data: TimeSeriesPoint[], targetPoints = 60): TimeSeriesPoint[] {
+function downsample<T>(data: T[], targetPoints = 60): T[] {
   if (data.length <= targetPoints) return data;
   const step = Math.ceil(data.length / targetPoints);
   return data.filter((_, i) => i % step === 0);
@@ -60,6 +71,7 @@ function downsample(data: TimeSeriesPoint[], targetPoints = 60): TimeSeriesPoint
 export function TimeSeriesPanel({
   upiTimeline,
   ewbTimeline = [],
+  twinTimeline = [],
   windows,
   scoreHistory = [],
   title = "Transaction Time Series",
@@ -71,18 +83,27 @@ export function TimeSeriesPanel({
   const days = parseInt(window);
   const upiSlice = downsample(sliceByDays(upiTimeline, days));
   const ewbSlice = downsample(sliceByDays(ewbTimeline, days));
+  const twinSlice = downsample(sliceByDays(twinTimeline, days));
   const winData = windows?.[`w${window}` as keyof typeof windows] as WindowAgg | undefined;
 
   // Merge UPI + EWB by date for combo chart
-  const dateMap = new Map<string, { date: string; upi?: number; ewb?: number; upi_count?: number }>();
+  const dateMap = new Map<string, { date: string; upi?: number; ewb?: number; upi_count?: number; twin_risk?: number }>();
   upiSlice.forEach((p) => {
     const label = (p.date || "").slice(0, 10); // YYYY-MM-DD
-    dateMap.set(p.date, { date: label, upi: p.volume, upi_count: p.count });
+    const upiVolume = p.volume ?? p.daily_volume;
+    const upiCount = p.count ?? p.daily_count;
+    dateMap.set(p.date, { date: label, upi: upiVolume, upi_count: upiCount });
   });
   ewbSlice.forEach((p) => {
     const label = (p.date || "").slice(0, 10);
     const existing = dateMap.get(p.date) ?? { date: label };
-    dateMap.set(p.date, { ...existing, ewb: p.volume });
+    const ewbVolume = p.volume ?? p.daily_ewb_volume ?? p.daily_volume;
+    dateMap.set(p.date, { ...existing, ewb: ewbVolume });
+  });
+  twinSlice.forEach((p) => {
+    const label = (p.date || "").slice(0, 10);
+    const existing = dateMap.get(p.date) ?? { date: label };
+    dateMap.set(p.date, { ...existing, twin_risk: p.risk_score });
   });
   const combo = Array.from(dateMap.values());
 
@@ -141,7 +162,7 @@ export function TimeSeriesPanel({
         {combo.length > 0 && (
           <div>
             <p className="text-xs font-semibold text-muted-foreground mb-2">
-              UPI vs {entityType === "msme" ? "E-Way Bill" : "Expense"} Volume — Last {WINDOW_LABELS[window]}
+              UPI vs {entityType === "msme" ? "E-Way Bill" : "Expense"} Volume + Twin Risk — Last {WINDOW_LABELS[window]}
             </p>
             <ResponsiveContainer width="100%" height={200}>
               <ComposedChart data={combo} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
@@ -158,13 +179,27 @@ export function TimeSeriesPanel({
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                 <XAxis dataKey="date" tick={{ fontSize: 9 }} interval={Math.ceil(combo.length / 8)} />
                 <YAxis tick={{ fontSize: 9 }} tickFormatter={(v) => fmtINR(v)} width={48} />
+                <YAxis
+                  yAxisId="risk"
+                  orientation="right"
+                  domain={[0, 1]}
+                  tick={{ fontSize: 9 }}
+                  tickFormatter={(v) => `${Math.round((Number(v) || 0) * 100)}%`}
+                  width={40}
+                />
                 <Tooltip
                   contentStyle={{ fontSize: 11 }}
-                  formatter={(v: number, n: string) => [`₹${fmtINR(v)}`, n]}
+                  formatter={(v: number, n: string) => {
+                    if (n === "Twin Risk") return [`${(Number(v) * 100).toFixed(1)}%`, n];
+                    return [`₹${fmtINR(Number(v) || 0)}`, n];
+                  }}
                 />
                 <Legend iconSize={10} wrapperStyle={{ fontSize: 10 }} />
                 <Area type="monotone" dataKey="upi" stroke="hsl(var(--primary))" fill="url(#upiGrad)" strokeWidth={2} name="UPI" />
                 <Area type="monotone" dataKey="ewb" stroke="#22c55e" fill="url(#ewbGrad)" strokeWidth={1.5} name={entityType === "msme" ? "E-Way Bill" : "Expense"} />
+                {twinSlice.length > 0 && (
+                  <Line yAxisId="risk" type="monotone" dataKey="twin_risk" stroke="#f59e0b" strokeWidth={2} dot={false} name="Twin Risk" />
+                )}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -175,7 +210,7 @@ export function TimeSeriesPanel({
           <div>
             <p className="text-xs font-semibold text-muted-foreground mb-2">Daily Transaction Count</p>
             <ResponsiveContainer width="100%" height={130}>
-              <BarChart data={upiSlice.map((p) => ({ date: p.date.slice(5), count: p.count }))} margin={{ top: 0, right: 10, left: -10, bottom: 0 }}>
+              <BarChart data={upiSlice.map((p) => ({ date: p.date.slice(5), count: p.count ?? p.daily_count }))} margin={{ top: 0, right: 10, left: -10, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                 <XAxis dataKey="date" tick={{ fontSize: 9 }} interval={Math.ceil(upiSlice.length / 8)} />
                 <YAxis tick={{ fontSize: 9 }} />

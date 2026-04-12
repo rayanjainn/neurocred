@@ -1,9 +1,8 @@
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/dib/authContext";
-import { twinApi, simulationApi, reasoningApi, adminApi } from "@/dib/api";
-import { useScore } from "@/hooks/useScore";
+import { twinApi, simulationApi, reasoningApi, adminApi, interventionApi } from "@/dib/api";
 import { PageHeader } from "@/components/shared";
 import { TimeSeriesPanel } from "@/components/TimeSeriesPanel";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   GitBranch, Activity, Download, Play, TrendingUp,
   CheckCircle2, AlertTriangle, Loader2, Brain, ChevronDown, ChevronRight,
-  Zap, RefreshCw, BarChart3, FileText,
+  Zap, RefreshCw, BarChart3, FileText, MessageSquare, Send, Clock3,
 } from "lucide-react";
 import {
   LineChart, Line, AreaChart, Area,
@@ -87,7 +86,6 @@ function ReasoningTab({ cotSteps, loading }: { cotSteps: any[]; loading: boolean
 export default function MsmeTwinPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const { score } = useScore(user?.gstin);
 
   const [twin, setTwin] = useState<any>(null);
   const [history, setHistory] = useState<any[]>([]);
@@ -95,6 +93,7 @@ export default function MsmeTwinPage() {
   const [cot, setCot] = useState<any>(null);
   const [explorerData, setExplorerData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [explorerLoading, setExplorerLoading] = useState(false);
   const [tab, setTab] = useState("timeline");
 
   // Simulation
@@ -104,26 +103,166 @@ export default function MsmeTwinPage() {
   const [simResult, setSimResult] = useState<any>(null);
   const [simRunning, setSimRunning] = useState(false);
   const [simProgress, setSimProgress] = useState(0);
+  const [autoSimEnabled, setAutoSimEnabled] = useState(true);
+  const [autoSimEverySec, setAutoSimEverySec] = useState(120);
+  const [lastSimAt, setLastSimAt] = useState<string | null>(null);
   const [generating, setGenerating] = useState(false);
+
+  // Tier 8 intervention controls
+  const [offer, setOffer] = useState<any>(null);
+  const [negSession, setNegSession] = useState<any>(null);
+  const [negInput, setNegInput] = useState("");
+  const [negBusy, setNegBusy] = useState(false);
+  const [liveFeed, setLiveFeed] = useState<any[]>([]);
+  const triggerSignatureRef = useRef("");
+  const triggerBootstrappedRef = useRef(false);
+
+  const pushFeed = useCallback((event: { title: string; detail: string; severity?: string }) => {
+    const ts = new Date().toISOString();
+    setLiveFeed((prev) => [
+      {
+        id: `${ts}:${event.title}`,
+        ts,
+        title: event.title,
+        detail: event.detail,
+        severity: event.severity ?? "low",
+      },
+      ...prev,
+    ].slice(0, 40));
+  }, []);
+
+  const loadTwinCore = useCallback(async () => {
+    if (!user) return;
+    setLoading(true);
+    try {
+      const [tw, hist, trig, cotData] = await Promise.all([
+        twinApi.get(user.id).catch(() => null),
+        twinApi.getHistory(user.id).catch(() => []),
+        twinApi.getTriggers(user.id).catch(() => []),
+        reasoningApi.getCot(user.id).catch(() => null),
+      ]);
+
+      setTwin(tw);
+      setHistory(Array.isArray(hist) ? hist : (hist as any)?.history ?? []);
+      const triggerPayload = Array.isArray(trig) ? { triggers: trig } : ((trig as any) ?? {});
+      const nextTriggers = Array.isArray(triggerPayload?.triggers) ? triggerPayload.triggers : [];
+      setTriggers(nextTriggers);
+      if (triggerPayload?.proactive_offer) {
+        setOffer(triggerPayload.proactive_offer);
+      }
+      const signature = JSON.stringify({
+        triggers: nextTriggers
+          .map((t: any) => `${t.type ?? t.trigger_id ?? "trigger"}:${t.reason ?? t.message ?? ""}`)
+          .sort(),
+        offer: triggerPayload?.proactive_offer?.offer_id ?? "",
+      });
+      triggerSignatureRef.current = signature;
+      triggerBootstrappedRef.current = true;
+      setCot(cotData);
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  const loadExplorerData = useCallback(async () => {
+    if (!user?.gstin) {
+      setExplorerData(null);
+      return;
+    }
+    setExplorerLoading(true);
+    try {
+      const explorer = await adminApi.getExplorerDetails(user.gstin);
+      setExplorerData(explorer);
+    } catch {
+      setExplorerData(null);
+    } finally {
+      setExplorerLoading(false);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
-    if (user.role !== "msme") { router.push("/login"); return; }
-    setLoading(true);
-    Promise.all([
-      twinApi.get(user.id).catch(() => null),
-      twinApi.getHistory(user.id).catch(() => []),
-      twinApi.getTriggers(user.id).catch(() => []),
-      reasoningApi.getCot(user.id).catch(() => null),
-      user.gstin ? adminApi.getExplorerDetails(user.gstin).catch(() => null) : Promise.resolve(null),
-    ]).then(([tw, hist, trig, cotData, explorer]) => {
-      setTwin(tw);
-      setHistory(Array.isArray(hist) ? hist : (hist as any)?.history ?? []);
-      setTriggers(Array.isArray(trig) ? trig : (trig as any)?.triggers ?? []);
-      setCot(cotData);
-      setExplorerData(explorer);
-    }).finally(() => setLoading(false));
-  }, [user, router]);
+    if (user.role !== "msme") {
+      router.push("/login");
+      return;
+    }
+    loadTwinCore();
+    loadExplorerData();
+  }, [user, router, loadTwinCore, loadExplorerData]);
+
+  const refreshAll = useCallback(() => {
+    loadTwinCore();
+    loadExplorerData();
+  }, [loadTwinCore, loadExplorerData]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const poll = async () => {
+      try {
+        const trig = await twinApi.getTriggers(user.id);
+        const payload = Array.isArray(trig) ? { triggers: trig } : ((trig as any) ?? {});
+        const nextTriggers = Array.isArray(payload?.triggers) ? payload.triggers : [];
+        setTriggers(nextTriggers);
+        if (payload?.proactive_offer) {
+          setOffer(payload.proactive_offer);
+        }
+
+        const signature = JSON.stringify({
+          triggers: nextTriggers
+            .map((t: any) => `${t.type ?? t.trigger_id ?? "trigger"}:${t.reason ?? t.message ?? ""}`)
+            .sort(),
+          offer: payload?.proactive_offer?.offer_id ?? "",
+        });
+
+        if (!triggerBootstrappedRef.current) {
+          triggerSignatureRef.current = signature;
+          triggerBootstrappedRef.current = true;
+          return;
+        }
+
+        if (signature !== triggerSignatureRef.current) {
+          triggerSignatureRef.current = signature;
+          const first = nextTriggers[0];
+          const sev = String(first?.urgency ?? first?.priority ?? "low").toLowerCase();
+          pushFeed({
+            title: "Live trigger update",
+            detail: first
+              ? `${first.type ?? first.trigger_id ?? "Trigger"}: ${first.reason ?? first.message ?? "updated"}`
+              : "No active triggers now.",
+            severity: sev.includes("high") || sev.includes("critical") ? "high" : sev.includes("med") ? "medium" : "low",
+          });
+        }
+      } catch {
+        // Silent polling failure.
+      }
+    };
+
+    const timer = setInterval(poll, 20000);
+    poll();
+    return () => clearInterval(timer);
+  }, [user, pushFeed]);
+
+  useEffect(() => {
+    if (!user || !negSession?.session_id) return;
+    const timer = setInterval(async () => {
+      try {
+        const latest = await interventionApi.getNegotiation(user.id, negSession.session_id);
+        setNegSession(latest);
+      } catch {
+        // Silent polling failure.
+      }
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [user, negSession?.session_id]);
+
+  const twinScore = Number(twin?.cibil_like_score ?? 0);
+  const twinRisk = Number(twin?.risk_score ?? 0);
+  const twinRiskBand =
+    twinRisk <= 0.30 ? "low_risk" : twinRisk <= 0.60 ? "medium_risk" : "high_risk";
+  const derivedWc = twinScore
+    ? Math.max(50_000, Math.min(50_00_000, Math.round(((twinScore - 300) / 600) * 50_00_000)))
+    : null;
 
   const applyScenario = (s: string) => {
     setScenario(s);
@@ -134,22 +273,177 @@ export default function MsmeTwinPage() {
     else { setIncomeChg([0]); setRevenueChg([0]); }
   };
 
-  const runSimulation = useCallback(async () => {
+  const runSimulation = useCallback(async (opts?: { silent?: boolean; source?: "manual" | "auto" }) => {
     if (!user) return;
-    setSimRunning(true); setSimResult(null); setSimProgress(0);
-    const interval = setInterval(() => {
-      setSimProgress((p) => { if (p >= 90) { clearInterval(interval); return 90; } return p + Math.random() * 12; });
-    }, 700);
+    const silent = Boolean(opts?.silent);
+    if (!silent) {
+      setSimResult(null);
+      setSimProgress(0);
+    }
+
+    setSimRunning(true);
+    let interval: ReturnType<typeof setInterval> | null = null;
+    if (!silent) {
+      interval = setInterval(() => {
+        setSimProgress((p) => {
+          if (p >= 90) {
+            if (interval) clearInterval(interval);
+            return 90;
+          }
+          return p + Math.random() * 12;
+        });
+      }, 700);
+    }
+
     try {
+      const jobLoss = scenario === "revenue_crash";
+      const medicalEmergency = scenario === "supply_squeeze";
       const res = await simulationApi.run({
         user_id: user.id,
-        gstin: user.gstin,
-        scenario_overrides: { income_change_pct: incomeChg[0], revenue_change_pct: revenueChg[0], scenario_name: scenario },
+        num_simulations: 1000,
+        run_counterfactual: true,
+        scenario_overrides: {
+          income_change_pct: incomeChg[0],
+          revenue_change_pct: revenueChg[0],
+          expense_change_pct: revenueChg[0] > 0 ? 0 : Math.abs(revenueChg[0]),
+          scenario_name: scenario,
+          job_loss: jobLoss,
+          medical_emergency: medicalEmergency,
+        },
       });
-      clearInterval(interval); setSimProgress(100); setSimResult(res);
-    } catch { clearInterval(interval); setSimProgress(0); }
-    finally { setTimeout(() => setSimRunning(false), 500); }
-  }, [user, incomeChg, revenueChg, scenario]);
+
+      if (interval) clearInterval(interval);
+      if (!silent) {
+        setSimProgress(100);
+      }
+      setSimResult(res);
+      setLastSimAt(new Date().toISOString());
+
+      const proactive = (res as any)?.proactive_offer;
+      if (proactive) {
+        setOffer(proactive);
+        pushFeed({
+          title: "Proactive offer refreshed",
+          detail: `Pre-qualified amount ${fmtINR(Number(proactive.approved_amount ?? 0))} is available.`,
+          severity: "medium",
+        });
+      }
+
+      const dp = Number(
+        (res as any)?.simulation_windows?.day_90?.default_probability
+          ?? (res as any)?.temporal_projections?.day_90?.default_probability
+          ?? 0,
+      );
+      pushFeed({
+        title: opts?.source === "auto" ? "Auto simulation completed" : "Simulation completed",
+        detail: `Scenario ${scenario.replace(/_/g, " ")}: 90d default probability ${(dp * 100).toFixed(1)}%.`,
+        severity: dp > 0.3 ? "high" : dp > 0.15 ? "medium" : "low",
+      });
+    } catch {
+      if (interval) clearInterval(interval);
+      if (!silent) {
+        setSimProgress(0);
+      }
+      pushFeed({
+        title: opts?.source === "auto" ? "Auto simulation failed" : "Simulation failed",
+        detail: "Could not compute the latest business projection.",
+        severity: "high",
+      });
+    } finally {
+      setTimeout(() => setSimRunning(false), silent ? 0 : 500);
+    }
+  }, [user, incomeChg, revenueChg, scenario, pushFeed]);
+
+  const fetchOffer = useCallback(async () => {
+    if (!user) return;
+    try {
+      const payload = await interventionApi.getOffer(user.id);
+      const nextOffer = (payload as any)?.offer ?? payload;
+      if (nextOffer) {
+        setOffer(nextOffer);
+        pushFeed({
+          title: "Pre-qualified offer generated",
+          detail: `Approved amount ${fmtINR(Number((nextOffer as any)?.approved_amount ?? 0))}.`,
+          severity: "medium",
+        });
+      }
+    } catch {
+      pushFeed({
+        title: "Offer fetch failed",
+        detail: "Could not generate an intervention offer right now.",
+        severity: "high",
+      });
+    }
+  }, [user, pushFeed]);
+
+  const startNegotiation = useCallback(async () => {
+    if (!user) return;
+    setNegBusy(true);
+    try {
+      const session = await interventionApi.startNegotiation(
+        user.id,
+        offer ? { offer } : undefined,
+      );
+      setNegSession(session);
+      pushFeed({
+        title: "Negotiation started",
+        detail: "Tier 8 intervention agent opened an EMI restructuring session.",
+        severity: "medium",
+      });
+    } catch {
+      pushFeed({
+        title: "Negotiation start failed",
+        detail: "Could not start restructuring negotiation.",
+        severity: "high",
+      });
+    } finally {
+      setNegBusy(false);
+    }
+  }, [user, offer, pushFeed]);
+
+  const sendNegotiationTurn = useCallback(async () => {
+    if (!user || !negSession?.session_id || !negInput.trim()) return;
+    const msg = negInput.trim();
+    setNegInput("");
+    setNegBusy(true);
+    try {
+      const next = await interventionApi.negotiateTurn(user.id, negSession.session_id, msg);
+      setNegSession(next);
+      const nextStatus = (next as any)?.status;
+      if (nextStatus === "confirmed") {
+        pushFeed({
+          title: "Restructure confirmed",
+          detail: "Twin updated with negotiated EMI restructuring metrics.",
+          severity: "low",
+        });
+        loadTwinCore();
+      } else if (nextStatus === "rejected") {
+        pushFeed({
+          title: "Restructure rejected",
+          detail: "No restructuring impact has been committed to the twin.",
+          severity: "medium",
+        });
+      }
+    } catch {
+      pushFeed({
+        title: "Negotiation turn failed",
+        detail: "The message could not be processed by the intervention engine.",
+        severity: "high",
+      });
+    } finally {
+      setNegBusy(false);
+    }
+  }, [user, negSession, negInput, loadTwinCore, pushFeed]);
+
+  useEffect(() => {
+    if (!user || !autoSimEnabled) return;
+    const timer = setInterval(() => {
+      if (!simRunning) {
+        runSimulation({ silent: true, source: "auto" });
+      }
+    }, autoSimEverySec * 1000);
+    return () => clearInterval(timer);
+  }, [user, autoSimEnabled, autoSimEverySec, simRunning, runSimulation]);
 
   const exportJson = async () => {
     if (!user) return;
@@ -166,7 +460,8 @@ export default function MsmeTwinPage() {
         generated_at: new Date().toISOString(),
         user_id: user.id, gstin: user.gstin, business_name: user.name,
         regulatory_note: "Business data export under RBI Digital Lending Guidelines 2023",
-        current_credit_score: score?.credit_score, risk_band: score?.risk_band,
+        current_credit_score: twinScore || null,
+        risk_band: twinRiskBand,
         twin_current_state: currentTwin, twin_evolution_history: twinHist,
         intervention_triggers: twinTriggers, llm_chain_of_thought: cotTrace,
         ews_snapshot: ews, transaction_timeseries: explorerData,
@@ -192,10 +487,22 @@ export default function MsmeTwinPage() {
     persona: v.persona ?? "unknown",
   }));
 
-  const fanChart: any[] = simResult?.fan_chart ?? simResult?.projections ?? [];
-  const ews: any = simResult?.ews_snapshot ?? simResult?.risk_snapshot ?? {};
-  const riskDelta = simResult?.risk_delta ?? simResult?.delta_risk_score;
-  const newLimit = simResult?.recommended_credit_limit ?? simResult?.new_credit_limit;
+  const fanChart: any[] = Array.isArray(simResult?.fan_chart_series)
+    ? simResult.fan_chart_series
+    : Array.isArray(simResult?.fan_chart?.p50)
+      ? (simResult.fan_chart.p50 as number[]).map((_: number, i: number) => ({
+          day: i + 1,
+          month: `D${i + 1}`,
+          p10: simResult?.fan_chart?.p10?.[i] ?? 0,
+          p50: simResult?.fan_chart?.p50?.[i] ?? 0,
+          p90: simResult?.fan_chart?.p90?.[i] ?? 0,
+        }))
+      : [];
+  const ews: any = simResult?.ews ?? simResult?.ews_snapshot ?? simResult?.risk_snapshot ?? {};
+  const day90 = simResult?.simulation_windows?.day_90 ?? simResult?.temporal_projections?.day_90 ?? {};
+  const riskDelta = simResult?.risk_delta ?? simResult?.delta_risk_score ?? day90?.default_probability;
+  const activeOffer = useMemo(() => offer ?? simResult?.proactive_offer ?? null, [offer, simResult]);
+  const newLimit = activeOffer?.approved_amount ?? simResult?.recommended_credit_limit ?? simResult?.new_credit_limit;
   const cotSteps: any[] = cot?.steps ?? cot?.chain_of_thought ?? [];
 
   const SEVERITY_COLOR: Record<string, string> = {
@@ -212,7 +519,7 @@ export default function MsmeTwinPage() {
         description="Your GSTIN financial twin — see evolution, simulate business scenarios, and download your credit profile."
         actions={
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" className="gap-2 h-8 text-xs" onClick={() => window.location.reload()}>
+            <Button variant="outline" size="sm" className="gap-2 h-8 text-xs" onClick={refreshAll}>
               <RefreshCw className="w-3.5 h-3.5" /> Refresh
             </Button>
             <Button variant="outline" size="sm" className="gap-2 h-8 text-xs" onClick={exportJson} disabled={generating}>
@@ -226,12 +533,12 @@ export default function MsmeTwinPage() {
       />
 
       {/* Snapshot banner */}
-      {(twin ?? score) && (
+      {twin && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: "Credit Score", value: score?.credit_score ?? "—", sub: score?.risk_band },
+            { label: "Credit Score", value: twinScore || "—", sub: twinRiskBand },
             { label: "Twin Risk Score", value: twin ? `${Math.round((twin.risk_score ?? 0) * 100)}%` : "—", bad: (twin?.risk_score ?? 0) > 0.5 },
-            { label: "Recommended WC", value: score?.recommended_wc_amount ? fmtINR(score.recommended_wc_amount) : "—" },
+            { label: "Recommended WC", value: derivedWc ? fmtINR(derivedWc) : "—" },
             { label: "Persona", value: twin?.persona ?? "—" },
           ].map((m) => (
             <Card key={m.label} className="border-border shadow-sm">
@@ -319,12 +626,13 @@ export default function MsmeTwinPage() {
 
         {/* Transactions / Time Series */}
         <TabsContent value="transactions">
-          {loading ? (
+          {loading || explorerLoading ? (
             <Card className="border-border shadow-sm"><CardContent className="flex items-center justify-center h-48"><Loader2 className="w-8 h-8 animate-spin text-muted-foreground" /></CardContent></Card>
           ) : explorerData ? (
             <TimeSeriesPanel
               upiTimeline={explorerData.upi_timeline ?? []}
               ewbTimeline={explorerData.ewb_timeline ?? []}
+              twinTimeline={explorerData.twin_timeline ?? []}
               windows={explorerData.windows}
               scoreHistory={explorerData.score_history ?? []}
               title="Business Transaction Time Series"
@@ -389,7 +697,7 @@ export default function MsmeTwinPage() {
                     </div>
                   </div>
 
-                  <Button className="w-full gap-2" onClick={runSimulation} disabled={simRunning}>
+                  <Button className="w-full gap-2" onClick={() => runSimulation({ source: "manual" })} disabled={simRunning}>
                     {simRunning ? <><Loader2 className="w-4 h-4 animate-spin" /> Simulating...</> : <><Play className="w-4 h-4" /> Run Scenario</>}
                   </Button>
 
@@ -413,9 +721,9 @@ export default function MsmeTwinPage() {
                     <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 duration-400">
                       <div className="grid grid-cols-2 gap-3">
                         {[
-                          { label: "Risk Change", value: riskDelta !== undefined ? `${riskDelta > 0 ? "+" : ""}${(riskDelta * 100).toFixed(1)}%` : "—", bad: riskDelta > 0 },
-                          { label: "New Credit Limit", value: newLimit ? fmtINR(newLimit) : "—", bad: false },
-                          { label: "EWS Signal", value: ews.level ?? ews.status ?? "—", bad: ["RED", "ORANGE"].includes(ews.level ?? "") },
+                          { label: "Default P (90d)", value: day90?.default_probability !== undefined ? `${((day90.default_probability ?? 0) * 100).toFixed(1)}%` : "—", bad: (day90?.default_probability ?? 0) > 0.3 },
+                          { label: "Pre-Qual Offer", value: newLimit ? fmtINR(newLimit) : "—", bad: false },
+                          { label: "EWS Signal", value: ews.severity ?? ews.level ?? ews.status ?? "—", bad: ["RED", "ORANGE"].includes((ews.severity ?? ews.level ?? "").toUpperCase()) },
                           { label: "Scenario", value: scenario.replace(/_/g, " "), bad: false },
                         ].map((m) => (
                           <div key={m.label} className="bg-muted/40 rounded-lg p-3">
@@ -427,9 +735,9 @@ export default function MsmeTwinPage() {
 
                       {fanChart.length > 0 && (
                         <ResponsiveContainer width="100%" height={130}>
-                          <AreaChart data={fanChart.slice(0, 12)} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+                          <AreaChart data={fanChart.slice(0, 60)} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                            <XAxis dataKey="month" tick={{ fontSize: 9 }} />
+                            <XAxis dataKey="day" tick={{ fontSize: 9 }} />
                             <YAxis tick={{ fontSize: 9 }} />
                             <Tooltip contentStyle={{ fontSize: 10 }} />
                             <Area type="monotone" dataKey="p90" stroke="#22c55e" fill="#22c55e" fillOpacity={0.1} strokeWidth={1} />
@@ -439,19 +747,217 @@ export default function MsmeTwinPage() {
                         </ResponsiveContainer>
                       )}
 
-                      {ews.top_risk_factors?.length > 0 && (
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-muted/40 rounded-lg p-2">
+                          <p className="text-[10px] text-muted-foreground">VaR 95</p>
+                          <p className="text-xs font-mono text-red-300">{simResult?.tail_risk?.var_95 ? fmtINR(Math.abs(simResult.tail_risk.var_95)) : "—"}</p>
+                        </div>
+                        <div className="bg-muted/40 rounded-lg p-2">
+                          <p className="text-[10px] text-muted-foreground">CVaR 95</p>
+                          <p className="text-xs font-mono text-red-300">{simResult?.tail_risk?.cvar_95 ? fmtINR(Math.abs(simResult.tail_risk.cvar_95)) : "—"}</p>
+                        </div>
+                        <div className="bg-muted/40 rounded-lg p-2">
+                          <p className="text-[10px] text-muted-foreground">Crash Date</p>
+                          <p className="text-xs font-mono text-amber-300">{simResult?.liquidity_crash_date_estimate ?? "None"}</p>
+                        </div>
+                      </div>
+
+                      {(simResult?.simulation_windows || simResult?.temporal_projections) && (
                         <div className="space-y-1">
-                          <p className="text-[10px] font-semibold text-muted-foreground">Top Risk Drivers</p>
-                          {ews.top_risk_factors.slice(0, 3).map((f: string, i: number) => (
-                            <div key={i} className="flex items-center gap-2 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded px-2 py-1">
-                              <AlertTriangle className="w-3 h-3 shrink-0" /> {f}
-                            </div>
-                          ))}
+                          <p className="text-[10px] font-semibold text-muted-foreground">30 / 60 / 90 Day Default Trajectory</p>
+                          {[30, 60, 90].map((d) => {
+                            const point = simResult?.simulation_windows?.[`day_${d}`] ?? simResult?.temporal_projections?.[`day_${d}`] ?? {};
+                            const dp = Number(point?.default_probability ?? 0);
+                            return (
+                              <div key={d} className="flex items-center justify-between text-xs bg-muted/30 border border-border/40 rounded px-2 py-1">
+                                <span>D{d}</span>
+                                <span className={cn(dp > 0.3 ? "text-red-300" : dp > 0.15 ? "text-amber-300" : "text-emerald-300")}>{(dp * 100).toFixed(1)}%</span>
+                              </div>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
                   )}
                 </div>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <Card className="border-border shadow-sm">
+                  <CardHeader className="py-3 px-4 border-b">
+                    <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                      <MessageSquare className="w-4 h-4 text-primary" /> Tier 8 Negotiation Console
+                      {negSession?.status && (
+                        <Badge variant="outline" className="text-[10px] ml-auto capitalize">
+                          {String(negSession.status).replace(/_/g, " ")}
+                        </Badge>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 space-y-4">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="bg-muted/40 rounded-lg p-2">
+                        <p className="text-[10px] text-muted-foreground">Approved Amount</p>
+                        <p className="text-xs font-semibold">{activeOffer?.approved_amount ? fmtINR(Number(activeOffer.approved_amount)) : "—"}</p>
+                      </div>
+                      <div className="bg-muted/40 rounded-lg p-2">
+                        <p className="text-[10px] text-muted-foreground">APR</p>
+                        <p className="text-xs font-semibold">{activeOffer?.apr ? `${activeOffer.apr}%` : "—"}</p>
+                      </div>
+                      <div className="bg-muted/40 rounded-lg p-2">
+                        <p className="text-[10px] text-muted-foreground">Risk Band</p>
+                        <p className="text-xs font-semibold capitalize">{activeOffer?.risk_band?.replace(/_/g, " ") ?? "—"}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={fetchOffer} disabled={negBusy}>
+                        {negBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                        Generate Offer
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={startNegotiation}
+                        disabled={negBusy}
+                      >
+                        Start Negotiation
+                      </Button>
+                    </div>
+
+                    {negSession?.selected && (
+                      <div className="grid grid-cols-3 gap-2 text-xs">
+                        <div className="bg-muted/30 rounded px-2 py-1 border border-border/50">
+                          EMI: <span className="font-semibold">{fmtINR(Number(negSession.selected.monthly_emi ?? 0))}</span>
+                        </div>
+                        <div className="bg-muted/30 rounded px-2 py-1 border border-border/50">
+                          Tenure: <span className="font-semibold">{Number(negSession.selected.tenure_months ?? 0)} mo</span>
+                        </div>
+                        <div className="bg-muted/30 rounded px-2 py-1 border border-border/50">
+                          Moratorium: <span className="font-semibold">{Number(negSession.selected.moratorium_days ?? 0)} d</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {negSession?.last_impact && (
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="bg-muted/30 rounded-lg p-2 border border-border/50">
+                          <p className="text-[10px] text-muted-foreground mb-1">Baseline</p>
+                          <p>Risk: <span className="font-semibold">{((Number(negSession.last_impact?.baseline?.risk_score ?? 0)) * 100).toFixed(1)}%</span></p>
+                          <p>Buffer: <span className="font-semibold">{Number(negSession.last_impact?.baseline?.cash_buffer_days ?? 0).toFixed(1)}d</span></p>
+                          <p>EMI Burden: <span className="font-semibold">{((Number(negSession.last_impact?.baseline?.emi_burden_ratio ?? 0)) * 100).toFixed(1)}%</span></p>
+                        </div>
+                        <div className="bg-emerald-500/5 rounded-lg p-2 border border-emerald-500/20">
+                          <p className="text-[10px] text-muted-foreground mb-1">Projected</p>
+                          <p>Risk: <span className="font-semibold">{((Number(negSession.last_impact?.projection?.risk_score ?? 0)) * 100).toFixed(1)}%</span></p>
+                          <p>Buffer: <span className="font-semibold">{Number(negSession.last_impact?.projection?.cash_buffer_days ?? 0).toFixed(1)}d</span></p>
+                          <p>EMI Burden: <span className="font-semibold">{((Number(negSession.last_impact?.projection?.emi_burden_ratio ?? 0)) * 100).toFixed(1)}%</span></p>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="border border-border/60 rounded-lg p-2 space-y-2 bg-muted/15">
+                      <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
+                        {(negSession?.conversation ?? []).length === 0 ? (
+                          <p className="text-xs text-muted-foreground">Start a negotiation session to see the multi-turn dialogue.</p>
+                        ) : (
+                          (negSession.conversation as any[]).map((turn: any, idx: number) => (
+                            <div
+                              key={`${turn.ts ?? idx}:${idx}`}
+                              className={cn(
+                                "text-xs rounded px-2 py-1 border",
+                                turn.role === "agent"
+                                  ? "bg-primary/10 border-primary/20"
+                                  : "bg-muted/40 border-border/60",
+                              )}
+                            >
+                              <p className="font-semibold capitalize mb-0.5">{turn.role ?? "agent"}</p>
+                              <p className="text-foreground/80 leading-relaxed">{turn.message ?? ""}</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={negInput}
+                          onChange={(e) => setNegInput(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              sendNegotiationTurn();
+                            }
+                          }}
+                          placeholder="Try: lower emi, extend tenure, defer, confirm"
+                          className="flex-1 h-8 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-primary/40"
+                          disabled={negBusy || !negSession?.session_id || negSession?.status !== "active"}
+                        />
+                        <Button
+                          size="sm"
+                          className="h-8 text-xs px-2"
+                          onClick={sendNegotiationTurn}
+                          disabled={negBusy || !negSession?.session_id || !negInput.trim() || negSession?.status !== "active"}
+                        >
+                          {negBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-border shadow-sm">
+                  <CardHeader className="py-3 px-4 border-b">
+                    <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                      <Clock3 className="w-4 h-4 text-primary" /> Continuous Tier 8 Monitoring
+                      <Badge variant="outline" className="text-[10px] ml-auto">Live Feed</Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-4 space-y-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant={autoSimEnabled ? "default" : "outline"}
+                        className="h-7 text-xs"
+                        onClick={() => setAutoSimEnabled((v) => !v)}
+                      >
+                        {autoSimEnabled ? "Auto Sim ON" : "Auto Sim OFF"}
+                      </Button>
+                      {[60, 120, 300].map((secs) => (
+                        <Button
+                          key={secs}
+                          size="sm"
+                          variant={autoSimEverySec === secs ? "default" : "outline"}
+                          className="h-7 text-xs"
+                          onClick={() => setAutoSimEverySec(secs)}
+                        >
+                          {secs}s
+                        </Button>
+                      ))}
+                      <span className="text-[10px] text-muted-foreground ml-auto">
+                        Last simulation: {lastSimAt ? fmtTs(lastSimAt) : "never"}
+                      </span>
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
+                      {liveFeed.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No interventions yet. Feed updates from trigger polling and simulation runs.</p>
+                      ) : (
+                        liveFeed.map((evt: any) => {
+                          const sev = ["critical", "high", "medium", "low"].includes(evt.severity) ? evt.severity : "low";
+                          return (
+                            <div key={evt.id} className={cn("border rounded-lg px-3 py-2 text-xs", SEVERITY_COLOR[sev])}>
+                              <div className="flex items-center justify-between mb-0.5">
+                                <span className="font-semibold">{evt.title}</span>
+                                <span className="text-[10px] text-muted-foreground">{fmtTs(evt.ts)}</span>
+                              </div>
+                              <p className="text-foreground/75 leading-relaxed">{evt.detail}</p>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
               </div>
             </CardContent>
           </Card>

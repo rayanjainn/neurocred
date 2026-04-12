@@ -47,6 +47,40 @@ def _derive_income_stability(fv: BehaviouralFeatureVector) -> float:
     return max(0.0, min(1.0, blend))
 
 
+def _derive_liquidity_index(cash_buffer_days: float, debit_failure_rate: float) -> float:
+    buffer_norm = max(0.0, min(1.0, cash_buffer_days / 30.0))
+    failure_penalty = max(0.0, min(1.0, debit_failure_rate))
+    return max(0.0, min(1.0, 0.8 * buffer_norm + 0.2 * (1.0 - failure_penalty)))
+
+
+def _derive_credit_dependency(fv: BehaviouralFeatureVector) -> float:
+    dep = (
+        0.45 * min(fv.emi_burden_ratio, 1.2) / 1.2
+        + 0.35 * max(0.0, min(1.0, fv.cash_dependency_index))
+        + 0.20 * min(fv.subscription_count_30d / 12.0, 1.0)
+    )
+    return max(0.0, min(1.0, dep))
+
+
+def _derive_peer_deviation_score(fv: BehaviouralFeatureVector) -> float:
+    return max(-3.0, min(3.0, fv.peer_cohort_benchmark_deviation))
+
+
+def _incremental_dna_update(
+    prev_dna: list[float],
+    new_dna: list[float],
+    risk_delta: float,
+) -> list[float]:
+    if not prev_dna or len(prev_dna) != len(new_dna):
+        return new_dna
+    alpha = max(0.15, min(0.65, 0.20 + abs(risk_delta) * 1.5))
+    blended = [
+        max(0.0, min(1.0, (1.0 - alpha) * p + alpha * n))
+        for p, n in zip(prev_dna, new_dna)
+    ]
+    return blended
+
+
 def _derive_risk_score(fv: BehaviouralFeatureVector) -> float:
     """
     Weighted non-linear combination, sigmoid-smoothed.
@@ -124,6 +158,20 @@ class TwinService:
         self._store = TwinStore(redis)
         self._redis = redis
 
+    _MATERIAL_TIMELINE_FIELDS = {
+        "risk_score",
+        "liquidity_health",
+        "liquidity_health_index",
+        "income_stability",
+        "spending_volatility",
+        "cash_buffer_days",
+        "emi_burden_ratio",
+        "credit_dependency_score",
+        "peer_deviation_score",
+        "persona",
+        "financial_dna",
+    }
+
     async def get_or_create(self, user_id: str) -> DigitalTwin:
         twin = await self._store.get(user_id)
         if twin is None:
@@ -149,23 +197,38 @@ class TwinService:
         twin = await self.get_or_create(fv.user_id)
 
         # 2. Derive metrics
+        prev_risk = twin.risk_score
         liquidity = _derive_liquidity(fv.cash_buffer_days)
+        liquidity_index = _derive_liquidity_index(
+            fv.cash_buffer_days,
+            fv.debit_failure_rate_90d,
+        )
         income_stability = _derive_income_stability(fv)
         spending_volatility = min(fv.spending_volatility_index, 1.0)
         risk_score = _derive_risk_score(fv)
+        credit_dependency_score = _derive_credit_dependency(fv)
+        peer_deviation_score = _derive_peer_deviation_score(fv)
 
         fv_dict = fv.model_dump()
-        dna = build_financial_dna({k: float(v) if isinstance(v, (int, bool)) else v
-                                   for k, v in fv_dict.items()
-                                   if isinstance(v, (int, float, bool))})
+        dna = build_financial_dna(
+            {
+                k: float(v) if isinstance(v, (int, bool)) else v
+                for k, v in fv_dict.items()
+                if isinstance(v, (int, float, bool))
+            }
+        )
+        dna = _incremental_dna_update(twin.financial_dna, dna, risk_score - prev_risk)
 
         # 3. Update core state
         twin.liquidity_health = liquidity
+        twin.liquidity_health_index = liquidity_index
         twin.income_stability = income_stability
         twin.spending_volatility = spending_volatility
         twin.risk_score = risk_score
         twin.cash_buffer_days = fv.cash_buffer_days
         twin.emi_burden_ratio = fv.emi_burden_ratio
+        twin.credit_dependency_score = credit_dependency_score
+        twin.peer_deviation_score = peer_deviation_score
         twin.financial_dna = dna
         twin.last_updated = datetime.utcnow()
 
@@ -177,6 +240,7 @@ class TwinService:
 
         # 4. Append summaries
         twin.risk_history.append(round(risk_score, 4))
+        twin.append_risk_point()
         twin.feature_history_summary.append(twin.snapshot_summary())
 
         # 5. Increment version
@@ -207,6 +271,44 @@ class TwinService:
             await self._redis.publish(_PUBSUB_CHANNEL, payload)
         except Exception:
             pass  # pub/sub is best-effort; twin is already persisted
+
+    async def update_state_patch(
+        self,
+        user_id: str,
+        *,
+        state_patch: dict[str, Any],
+        emit_event: bool = True,
+    ) -> Optional[DigitalTwin]:
+        """Apply non-feature state updates while preserving immutable twin version history."""
+        twin = await self.get(user_id)
+        if twin is None:
+            return None
+
+        changed_fields: set[str] = set()
+        for key, value in state_patch.items():
+            if not hasattr(twin, key):
+                continue
+            old = getattr(twin, key)
+            if old != value:
+                setattr(twin, key, value)
+                changed_fields.add(key)
+
+        if not changed_fields:
+            return twin
+
+        has_material_change = any(k in self._MATERIAL_TIMELINE_FIELDS for k in changed_fields)
+
+        twin.last_updated = datetime.utcnow()
+        if has_material_change:
+            twin.version += 1
+            twin.risk_history.append(round(twin.risk_score, 4))
+            twin.append_risk_point()
+            twin.feature_history_summary.append(twin.snapshot_summary())
+        twin.derive_avatar()
+        await self._store.save(twin, append_history=has_material_change)
+        if emit_event:
+            await self._emit_twin_updated(twin)
+        return twin
 
     async def get(self, user_id: str) -> Optional[DigitalTwin]:
         return await self._store.get(user_id)

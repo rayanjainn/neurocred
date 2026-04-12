@@ -5,12 +5,14 @@ Handles Redis persistence for Digital Twins:
   - GET  current twin state  →  `twin:{user_id}`
   - SET  current twin state
   - LPUSH immutable snapshots → `twin:{user_id}:history`
+    - XADD timeline events      → `stream:twin_timeline`
   - Reconstruct twin at any historical timestamp
 """
 
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime
 from typing import Optional
 
@@ -20,12 +22,39 @@ from src.twin.twin_model import DigitalTwin
 
 _TWIN_KEY = "twin:{uid}"
 _HIST_KEY = "twin:{uid}:history"
-_HIST_MAX = 100  # max snapshots to retain per user
+_HIST_MAX = int(os.getenv("TWIN_HISTORY_MAX", "0"))  # 0 = unbounded history
+_TIMELINE_STREAM_KEY = os.getenv("TWIN_TIMELINE_STREAM_KEY", "stream:twin_timeline")
+_TIMELINE_STREAM_MAXLEN = int(os.getenv("TWIN_TIMELINE_STREAM_MAXLEN", "200000"))
 
 
 class TwinStore:
     def __init__(self, redis: aioredis.Redis) -> None:
         self._r = redis
+
+    async def _append_timeline_event(self, twin: DigitalTwin, payload: str) -> None:
+        """Best-effort append of snapshot metadata to a Redis stream timeline."""
+        fields = {
+            "entity": "digital_twin",
+            "user_id": twin.user_id,
+            "version": str(twin.version),
+            "risk_score": f"{twin.risk_score:.6f}",
+            "liquidity_health": str(twin.liquidity_health),
+            "ts": twin.last_updated.isoformat(),
+            "snapshot": payload,
+        }
+        try:
+            if _TIMELINE_STREAM_MAXLEN > 0:
+                await self._r.xadd(
+                    _TIMELINE_STREAM_KEY,
+                    fields,
+                    maxlen=_TIMELINE_STREAM_MAXLEN,
+                    approximate=True,
+                )
+            else:
+                await self._r.xadd(_TIMELINE_STREAM_KEY, fields)
+        except Exception:
+            # Timeline stream is supplementary; primary twin persistence must not fail.
+            pass
 
     # ── read ──────────────────────────────────────────────────────────────────
 
@@ -87,14 +116,18 @@ class TwinStore:
 
     # ── write ─────────────────────────────────────────────────────────────────
 
-    async def save(self, twin: DigitalTwin) -> None:
-        """Persist current state and push snapshot to history."""
+    async def save(self, twin: DigitalTwin, *, append_history: bool = True) -> None:
+        """Persist current state and optionally push snapshot to history."""
         payload = twin.model_dump_json()
         pipe = self._r.pipeline()
         pipe.set(_TWIN_KEY.format(uid=twin.user_id), payload)
-        pipe.lpush(_HIST_KEY.format(uid=twin.user_id), payload)
-        pipe.ltrim(_HIST_KEY.format(uid=twin.user_id), 0, _HIST_MAX - 1)
+        if append_history:
+            pipe.lpush(_HIST_KEY.format(uid=twin.user_id), payload)
+            if _HIST_MAX > 0:
+                pipe.ltrim(_HIST_KEY.format(uid=twin.user_id), 0, _HIST_MAX - 1)
         await pipe.execute()
+        if append_history:
+            await self._append_timeline_event(twin, payload)
 
     async def delete(self, user_id: str) -> None:
         pipe = self._r.pipeline()
@@ -113,11 +146,16 @@ class TwinStore:
         for i in range(0, len(twins), BATCH):
             batch = twins[i : i + BATCH]
             pipe = self._r.pipeline()
+            payloads: list[tuple[DigitalTwin, str]] = []
             for twin in batch:
                 payload = twin.model_dump_json()
                 pipe.set(_TWIN_KEY.format(uid=twin.user_id), payload)
                 pipe.lpush(_HIST_KEY.format(uid=twin.user_id), payload)
-                pipe.ltrim(_HIST_KEY.format(uid=twin.user_id), 0, _HIST_MAX - 1)
+                if _HIST_MAX > 0:
+                    pipe.ltrim(_HIST_KEY.format(uid=twin.user_id), 0, _HIST_MAX - 1)
+                payloads.append((twin, payload))
             await pipe.execute()
+            for twin, payload in payloads:
+                await self._append_timeline_event(twin, payload)
             saved += len(batch)
         return saved

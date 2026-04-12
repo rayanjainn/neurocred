@@ -626,12 +626,49 @@ async def get_twin(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/twin/{user_id}/history")
-async def get_twin_history(user_id: str, limit: int = 20) -> dict[str, Any]:
+async def get_twin_history(
+    user_id: str,
+    limit: int = 20,
+    material_only: bool = True,
+) -> dict[str, Any]:
     """Get the version history of a Digital Twin (newest first)."""
     from src.twin.twin_service import TwinService
+
+    def _signature(snap: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            round(float(snap.get("risk_score", 0.0) or 0.0), 4),
+            str(snap.get("liquidity_health", "")),
+            round(float(snap.get("cash_buffer_days", 0.0) or 0.0), 2),
+            round(float(snap.get("emi_burden_ratio", 0.0) or 0.0), 4),
+            round(float(snap.get("income_stability", 0.0) or 0.0), 4),
+            round(float(snap.get("spending_volatility", 0.0) or 0.0), 4),
+            str(snap.get("persona", "")),
+        )
+
     svc = TwinService(app.state.redis)
-    history = await svc.get_history(user_id, limit=limit)
-    return {"user_id": user_id, "count": len(history), "history": history}
+    raw_history = await svc.get_history(user_id, limit=max(limit * 5, limit))
+
+    if material_only:
+        # Deduplicate adjacent snapshots with identical business risk signature.
+        # Store order is newest-first, so we filter in chronological order then flip back.
+        chronological = list(reversed(raw_history))
+        filtered_chronological: list[dict[str, Any]] = []
+        prev_sig: tuple[Any, ...] | None = None
+        for snap in chronological:
+            sig = _signature(snap)
+            if sig != prev_sig:
+                filtered_chronological.append(snap)
+                prev_sig = sig
+        history = list(reversed(filtered_chronological))[:limit]
+    else:
+        history = raw_history[:limit]
+
+    return {
+        "user_id": user_id,
+        "count": len(history),
+        "raw_count": len(raw_history),
+        "history": history,
+    }
 
 
 @app.post("/twin/{user_id}/update")
@@ -758,6 +795,7 @@ async def evaluate_twin_triggers(user_id: str) -> dict[str, Any]:
     Evaluate and return all fired intervention triggers for a user's twin state.
     Useful for debugging the Tier 8 trigger engine.
     """
+    from src.intervention.negotiation_engine import make_prequalified_offer
     from src.intervention.trigger_engine import evaluate_triggers
     from src.twin.twin_service import TwinService
 
@@ -767,10 +805,14 @@ async def evaluate_twin_triggers(user_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"No twin for user_id={user_id}.")
 
     fired = evaluate_triggers(twin)
+    trigger_types = {t.trigger_type for t in fired}
+    proactive_offer = make_prequalified_offer(twin) if "prequalified_micro_loan_offer" in trigger_types else None
+
     return {
         "user_id": user_id,
         "twin_version": twin.version,
         "fired_count": len(fired),
+        "proactive_offer": proactive_offer,
         "triggers": [
             {
                 "type": t.trigger_type,
@@ -783,6 +825,141 @@ async def evaluate_twin_triggers(user_id: str) -> dict[str, Any]:
             for t in fired
         ],
     }
+
+
+@app.get("/intervention/{user_id}/offer")
+async def get_prequalified_offer(user_id: str) -> dict[str, Any]:
+    """Generate a proactive micro-loan offer based on current twin distress state."""
+    from src.intervention.negotiation_engine import make_prequalified_offer
+    from src.twin.twin_service import TwinService
+
+    redis: aioredis.Redis = app.state.redis
+    twin_svc = TwinService(redis)
+    twin = await twin_svc.get(user_id)
+    if twin is None:
+        raise HTTPException(status_code=404, detail=f"No twin for user_id={user_id}.")
+
+    offer = make_prequalified_offer(twin)
+    await redis.setex(f"tier8:offer:{user_id}", 86400, json.dumps(offer))
+    await twin_svc.update_state_patch(
+        user_id,
+        state_patch={
+            "active_flags": (
+                twin.active_flags
+                + [
+                    {
+                        "flag_type": "LIQUIDITY_CRISIS",
+                        "severity": "HIGH" if twin.liquidity_health == "LOW" else "MEDIUM",
+                        "evidence_citations": [f"cash_buffer_days: {twin.cash_buffer_days:.2f}"],
+                        "recommended_action": "Review pre-qualified offer and discuss EMI restructuring.",
+                        "confidence": 0.82,
+                        "source_hypothesis": "TIER8_PROACTIVE",
+                    }
+                ]
+            )[:10]
+        },
+    )
+
+    return {
+        "user_id": user_id,
+        "offer": offer,
+        "liquidity_health": twin.liquidity_health,
+        "cash_buffer_days": twin.cash_buffer_days,
+    }
+
+
+@app.post("/intervention/{user_id}/negotiation/start")
+async def start_intervention_negotiation(user_id: str, body: dict[str, Any] = {}) -> dict[str, Any]:
+    """Start a structured multi-turn negotiation for EMI restructuring."""
+    from src.intervention.negotiation_engine import make_prequalified_offer, start_negotiation_session
+    from src.twin.twin_service import TwinService
+
+    redis: aioredis.Redis = app.state.redis
+    twin_svc = TwinService(redis)
+    twin = await twin_svc.get(user_id)
+    if twin is None:
+        raise HTTPException(status_code=404, detail=f"No twin for user_id={user_id}.")
+
+    offer = body.get("offer") if isinstance(body.get("offer"), dict) else make_prequalified_offer(twin)
+    session = start_negotiation_session(twin, offer)
+    await redis.setex(f"tier8:negotiation:{session['session_id']}", 86400, json.dumps(session))
+
+    return session
+
+
+@app.get("/intervention/{user_id}/negotiation/{session_id}")
+async def get_intervention_negotiation(user_id: str, session_id: str) -> dict[str, Any]:
+    redis: aioredis.Redis = app.state.redis
+    raw = await redis.get(f"tier8:negotiation:{session_id}")
+    if not raw:
+        raise HTTPException(status_code=404, detail=f"Negotiation session {session_id} not found")
+    session = json.loads(raw)
+    if session.get("user_id") != user_id:
+        raise HTTPException(status_code=400, detail="session user mismatch")
+    return session
+
+
+@app.post("/intervention/{user_id}/negotiation/{session_id}/turn")
+async def advance_intervention_negotiation(
+    user_id: str,
+    session_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    """Advance negotiation by one turn, simulate impact, and optionally commit update on confirmation."""
+    from src.intervention.audit_logger import AuditLogger
+    from src.intervention.negotiation_engine import advance_negotiation_session
+    from src.twin.twin_service import TwinService
+
+    message = str(body.get("message", "")).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is required")
+
+    redis: aioredis.Redis = app.state.redis
+    raw = await redis.get(f"tier8:negotiation:{session_id}")
+    if not raw:
+        raise HTTPException(status_code=404, detail=f"Negotiation session {session_id} not found")
+    session = json.loads(raw)
+    if session.get("user_id") != user_id:
+        raise HTTPException(status_code=400, detail="session user mismatch")
+
+    twin_svc = TwinService(redis)
+    twin = await twin_svc.get(user_id)
+    if twin is None:
+        raise HTTPException(status_code=404, detail=f"No twin for user_id={user_id}.")
+
+    session = advance_negotiation_session(session, twin, message)
+
+    if session.get("status") == "confirmed":
+        impact = session.get("last_impact", {})
+        projection = impact.get("projection", {}) if isinstance(impact, dict) else {}
+        await twin_svc.update_state_patch(
+            user_id,
+            state_patch={
+                "emi_burden_ratio": float(projection.get("emi_burden_ratio", twin.emi_burden_ratio)),
+                "cash_buffer_days": float(projection.get("cash_buffer_days", twin.cash_buffer_days)),
+                "risk_score": float(projection.get("risk_score", twin.risk_score)),
+                "last_narrative": (
+                    "EMI restructuring negotiated and accepted. "
+                    "Twin state updated with projected post-restructure metrics."
+                ),
+            },
+        )
+
+    await redis.setex(f"tier8:negotiation:{session_id}", 86400, json.dumps(session))
+
+    auditor = AuditLogger(redis)
+    await auditor.log(
+        user_id,
+        "chat_message",
+        {
+            "channel": "tier8_negotiation",
+            "session_id": session_id,
+            "status": session.get("status"),
+            "turn": session.get("turn"),
+        },
+    )
+
+    return session
 
 
 @app.post("/twin/bootstrap")
@@ -1123,17 +1300,20 @@ async def run_reasoning(user_id: str, body: dict[str, Any] = {}) -> dict[str, An
         is_first_run=bool(body.get("is_first_run", False)),
     )
 
-    # Write Tier 5 outputs back to the digital twin
-    twin_raw = await redis.get(f"twin:{user_id}")
-    if twin_raw:
-        twin_data = json.loads(twin_raw)
-        twin_data["last_narrative"] = result.risk_narrative
-        twin_data["active_flags"] = [f.model_dump() for f in result.concern_flags]
-        twin_data["intent_signals"] = [s.model_dump() for s in result.intent_signals]
-        twin_data["last_cot_trace"] = result.cot_trace.model_dump()
-        twin_data["last_reasoning_run_id"] = result.run_id
-        twin_data["last_reasoning_at"] = result.computed_at.isoformat()
-        await redis.set(f"twin:{user_id}", json.dumps(twin_data, default=str))
+    # Write Tier 5 outputs back to the digital twin as a new immutable version.
+    from src.twin.twin_service import TwinService
+    twin_svc = TwinService(redis)
+    await twin_svc.update_state_patch(
+        user_id,
+        state_patch={
+            "last_narrative": result.risk_narrative,
+            "active_flags": [f.model_dump() for f in result.concern_flags],
+            "intent_signals": [s.model_dump() for s in result.intent_signals],
+            "last_cot_trace": result.cot_trace.model_dump(),
+            "last_reasoning_run_id": result.run_id,
+            "last_reasoning_at": result.computed_at,
+        },
+    )
 
     return {
         "user_id": user_id,
@@ -1344,13 +1524,27 @@ async def submit_interrogation_answer(
         updated_session.model_dump_json(),
     )
 
-    # Apply twin patches if any
+    # Apply twin patches through Tier 4 lifecycle so each update becomes a snapshot.
     if twin_patch:
-        twin_raw = await redis.get(f"twin:{session.user_id}")
-        if twin_raw:
-            twin_data = json.loads(twin_raw)
-            twin_data.update(twin_patch)
-            await redis.set(f"twin:{session.user_id}", json.dumps(twin_data, default=str))
+        from src.twin.twin_service import TwinService
+
+        svc = TwinService(redis)
+        feature_patch = {k: v for k, v in twin_patch.items() if k in BFV.model_fields}
+        state_patch = {k: v for k, v in twin_patch.items() if k not in BFV.model_fields}
+
+        if feature_patch:
+            next_payload = fv.model_dump(mode="json")
+            next_payload.update(feature_patch)
+            next_payload["computed_at"] = datetime.utcnow().isoformat()
+            next_fv = BFV(**{k: v for k, v in next_payload.items() if k in BFV.model_fields})
+            await redis.set(
+                f"twin:features:{session.user_id}",
+                json.dumps(next_fv.model_dump(mode="json")),
+            )
+            await svc.update_from_features(next_fv)
+
+        if state_patch:
+            await svc.update_state_patch(session.user_id, state_patch=state_patch)
 
     # Emit completion event
     if updated_session.state.value == "COMPLETE":
@@ -1628,6 +1822,325 @@ async def vigilance_stream_status() -> dict[str, Any]:
     }
 
 
+def _coerce_feature_payload(feat_data: dict[str, Any]) -> dict[str, Any]:
+    bool_fields = {"salary_day_spike_flag", "anomaly_flag"}
+    int_fields = {
+        "subscription_count_30d",
+        "emi_payment_count_90d",
+        "merchant_category_shift_count",
+        "months_active_gst",
+    }
+    for f in bool_fields:
+        if f in feat_data:
+            feat_data[f] = feat_data[f] in ("1", "True", "true", True, 1)
+    for f in int_fields:
+        if f in feat_data and feat_data[f] is not None:
+            try:
+                feat_data[f] = int(float(feat_data[f]))
+            except (ValueError, TypeError):
+                feat_data[f] = 0
+    for k, v in list(feat_data.items()):
+        if isinstance(v, str) and v == "":
+            feat_data[k] = None
+    return feat_data
+
+
+async def _load_latest_feature_vector(
+    redis: aioredis.Redis,
+    user_id: str,
+) -> BehaviouralFeatureVector | None:
+    from pathlib import Path
+
+    import polars as pl
+
+    raw = await redis.get(f"twin:features:{user_id}")
+    if raw:
+        feat_data = _coerce_feature_payload(json.loads(raw))
+    else:
+        cache = Path(settings.features_path) / f"user_id={user_id}" / "features.parquet"
+        if not cache.exists():
+            return None
+        df = pl.read_parquet(cache)
+        if df.height == 0:
+            return None
+        feat_data = df.row(0, named=True)
+        feat_data["user_id"] = user_id
+        feat_data.setdefault("computed_at", datetime.utcnow().isoformat())
+        feat_data = _coerce_feature_payload(feat_data)
+
+    try:
+        return BehaviouralFeatureVector(
+            **{k: v for k, v in feat_data.items() if k in BehaviouralFeatureVector.model_fields}
+        )
+    except Exception:
+        return None
+
+
+def _build_simulation_snapshot(
+    user_id: str,
+    twin_data: dict[str, Any] | None,
+    fv: BehaviouralFeatureVector | None,
+    provided: dict[str, Any] | None,
+) -> dict[str, Any]:
+    twin_data = twin_data or {}
+    provided = provided or {}
+
+    def _to_num(val: Any) -> float | None:
+        if val is None:
+            return None
+        try:
+            n = float(val)
+        except (TypeError, ValueError):
+            return None
+        return n
+
+    def _first_num(*vals: Any) -> float | None:
+        for v in vals:
+            n = _to_num(v)
+            if n is not None:
+                return n
+        return None
+
+    def _clamp(v: float, lo: float, hi: float) -> float:
+        return max(lo, min(hi, v))
+
+    income_monthly = _first_num(
+        provided.get("income_monthly"),
+        twin_data.get("income_monthly"),
+        fv.income_30d if fv else None,
+        (fv.income_90d / 3.0) if fv and fv.income_90d else None,
+    )
+    if income_monthly is None or income_monthly <= 0:
+        raise ValueError(
+            f"Simulation snapshot missing income for user_id={user_id}. "
+            "Run feature generation first (tiers 1-3)."
+        )
+
+    essential_monthly = _first_num(
+        provided.get("essential_expense_monthly"),
+        twin_data.get("essential_expense_monthly"),
+        fv.essential_30d if fv else None,
+    )
+    if (essential_monthly is None or essential_monthly <= 0) and fv is not None:
+        inferred_ess_ratio = _clamp(1.0 - fv.savings_rate - fv.discretionary_ratio, 0.1, 0.9)
+        essential_monthly = income_monthly * inferred_ess_ratio
+    if essential_monthly is None or essential_monthly <= 0:
+        raise ValueError(
+            f"Simulation snapshot missing essential expense for user_id={user_id}."
+        )
+
+    discretionary_monthly = _first_num(
+        provided.get("discretionary_expense_monthly"),
+        twin_data.get("discretionary_expense_monthly"),
+        fv.discretionary_30d if fv else None,
+    )
+    if (discretionary_monthly is None or discretionary_monthly < 0) and fv is not None:
+        discretionary_monthly = income_monthly * _clamp(fv.discretionary_ratio, 0.0, 0.8)
+    if discretionary_monthly is None or discretionary_monthly < 0:
+        raise ValueError(
+            f"Simulation snapshot missing discretionary expense for user_id={user_id}."
+        )
+
+    emi_monthly = _first_num(
+        provided.get("emi_monthly"),
+        twin_data.get("emi_monthly"),
+        (fv.emi_burden_ratio * income_monthly) if fv else None,
+    )
+    if emi_monthly is None or emi_monthly <= 0:
+        raise ValueError(
+            f"Simulation snapshot missing EMI burden for user_id={user_id}."
+        )
+
+    cash_buffer_days = _first_num(
+        provided.get("cash_buffer_days"),
+        twin_data.get("cash_buffer_days"),
+        fv.cash_buffer_days if fv else None,
+    )
+    if cash_buffer_days is None or cash_buffer_days < 0:
+        raise ValueError(
+            f"Simulation snapshot missing cash buffer for user_id={user_id}."
+        )
+
+    income_stability = _first_num(
+        provided.get("income_stability"),
+        twin_data.get("income_stability"),
+        fv.income_stability_score if fv else None,
+    )
+    if income_stability is None:
+        raise ValueError(
+            f"Simulation snapshot missing income stability for user_id={user_id}."
+        )
+
+    spending_volatility = _first_num(
+        provided.get("spending_volatility"),
+        twin_data.get("spending_volatility"),
+        fv.spending_volatility_index if fv else None,
+    )
+    if spending_volatility is None:
+        raise ValueError(
+            f"Simulation snapshot missing spending volatility for user_id={user_id}."
+        )
+
+    risk_score = _first_num(
+        provided.get("risk_score"),
+        twin_data.get("risk_score"),
+    )
+    if risk_score is None and fv is not None:
+        risk_score = _clamp(
+            0.30 * _clamp(fv.emi_burden_ratio / 1.2, 0.0, 1.2)
+            + 0.25 * _clamp(fv.debit_failure_rate_90d, 0.0, 1.0)
+            + 0.20 * _clamp(fv.spending_volatility_index / 3.0, 0.0, 1.0)
+            + 0.15 * _clamp(1.0 - fv.income_stability_score, 0.0, 1.0)
+            + 0.10 * _clamp(1.0 - (fv.cash_buffer_days / 30.0), 0.0, 1.0),
+            0.0,
+            1.0,
+        )
+    if risk_score is None:
+        raise ValueError(
+            f"Simulation snapshot missing risk score for user_id={user_id}."
+        )
+
+    debit_failure_rate = _first_num(
+        provided.get("debit_failure_rate"),
+        twin_data.get("debit_failure_rate"),
+        fv.debit_failure_rate_90d if fv else None,
+    )
+    if debit_failure_rate is None:
+        debit_failure_rate = 0.0
+
+    emi_overdue_count = _first_num(
+        provided.get("emi_overdue_count"),
+        twin_data.get("emi_overdue_count"),
+    )
+    if emi_overdue_count is None:
+        emi_overdue_count = round(_clamp(debit_failure_rate * 3.0, 0.0, 3.0))
+
+    daily_outflow = max((essential_monthly + discretionary_monthly + emi_monthly) / 30.0, 1.0)
+    cash_balance_current = _first_num(
+        provided.get("cash_balance_current"),
+        twin_data.get("cash_balance_current"),
+    )
+    if cash_balance_current is None:
+        cash_balance_current = cash_buffer_days * daily_outflow
+
+    overdraft_limit = _first_num(
+        provided.get("overdraft_limit"),
+        twin_data.get("overdraft_limit"),
+    )
+    if overdraft_limit is None:
+        overdraft_limit = income_monthly * 0.2
+
+    credit_dependency = _first_num(twin_data.get("credit_dependency_score"))
+    cascade_susceptibility = _first_num(
+        provided.get("cascade_susceptibility"),
+        twin_data.get("cascade_susceptibility"),
+    )
+    if cascade_susceptibility is None:
+        dep_component = _clamp(credit_dependency if credit_dependency is not None else _clamp(emi_monthly / max(income_monthly, 1.0), 0.0, 1.2), 0.0, 1.2)
+        vol_component = _clamp(spending_volatility, 0.0, 1.0)
+        fail_component = _clamp(debit_failure_rate, 0.0, 1.0)
+        cascade_susceptibility = _clamp(0.45 * dep_component + 0.35 * vol_component + 0.20 * fail_component, 0.0, 1.0)
+
+    liquidity_health = str(provided.get("liquidity_health") or twin_data.get("liquidity_health") or "")
+    if not liquidity_health:
+        if cash_buffer_days < 5.0:
+            liquidity_health = "LOW"
+        elif cash_buffer_days <= 15.0:
+            liquidity_health = "MEDIUM"
+        else:
+            liquidity_health = "HIGH"
+
+    return {
+        "income_stability": _clamp(income_stability, 0.0, 1.0),
+        "spending_volatility": _clamp(spending_volatility, 0.0, 1.0),
+        "liquidity_health": liquidity_health,
+        "risk_score": _clamp(risk_score, 0.0, 1.0),
+        "cash_buffer_days": max(0.0, cash_buffer_days),
+        "emi_monthly": max(1.0, emi_monthly),
+        "emi_overdue_count": int(max(0.0, emi_overdue_count)),
+        "debit_failure_rate": _clamp(debit_failure_rate, 0.0, 1.0),
+        "cash_balance_current": cash_balance_current,
+        "cascade_susceptibility": _clamp(cascade_susceptibility, 0.0, 1.0),
+        "persona": str(provided.get("persona") or twin_data.get("persona") or "unknown"),
+        "financial_dna": provided.get("financial_dna") or twin_data.get("financial_dna") or [],
+        "income_monthly": income_monthly,
+        "essential_expense_monthly": essential_monthly,
+        "discretionary_expense_monthly": discretionary_monthly,
+        "overdraft_limit": max(0.0, overdraft_limit),
+    }
+
+
+def _scenario_from_overrides(
+    scenario_raw: dict[str, Any] | None,
+    overrides: dict[str, Any] | None,
+) -> dict[str, Any]:
+    from src.simulation.scenario_library import ScenarioSpec
+
+    if scenario_raw:
+        return ScenarioSpec(
+            type=scenario_raw.get("type", "baseline"),
+            components=scenario_raw.get("components", []),
+            start_day=scenario_raw.get("start_day", 0),
+            duration_override=scenario_raw.get("duration_override"),
+            custom_params=scenario_raw.get("custom_params", {}),
+        ).__dict__
+
+    overrides = overrides or {}
+    components: list[str] = []
+    custom_params: dict[str, Any] = {}
+
+    income_change = float(overrides.get("income_change_pct", 0.0) or 0.0)
+    expense_change = float(overrides.get("expense_change_pct", 0.0) or 0.0)
+    revenue_change = float(overrides.get("revenue_change_pct", 0.0) or 0.0)
+    scenario_name = str(overrides.get("scenario_name", "")).lower()
+
+    effective_income_change = income_change if income_change != 0 else revenue_change
+    if effective_income_change <= -45:
+        components.append("S_INC_DROP_50")
+    elif effective_income_change <= -15:
+        components.append("S_INC_DROP_20")
+    elif effective_income_change >= 15 or revenue_change >= 25 or scenario_name == "expansion":
+        components.append("S_INC_RISE_20")
+
+    if expense_change >= 25 or scenario_name in {"supply_squeeze", "gst_shock"}:
+        components.append("S_EXP_SURGE_30")
+    if scenario_name == "gst_shock":
+        components.append("S_RATE_HIKE")
+    if bool(overrides.get("job_loss")) or scenario_name == "job_loss":
+        components.append("S_JOB_LOSS")
+    if bool(overrides.get("medical_emergency")) or scenario_name == "medical":
+        components.append("S_MEDICAL")
+        if overrides.get("medical_expense_amount") is not None:
+            custom_params["medical_expense_amount"] = float(overrides.get("medical_expense_amount"))
+
+    # Deduplicate while preserving order.
+    if components:
+        components = list(dict.fromkeys(components))
+
+    if not components:
+        return ScenarioSpec(type="baseline").__dict__
+    if len(components) == 1:
+        return ScenarioSpec(type="atomic", components=components, custom_params=custom_params).__dict__
+    return ScenarioSpec(type="compound", components=components, custom_params=custom_params).__dict__
+
+
+def _fan_to_series(fan: dict[str, Any]) -> list[dict[str, Any]]:
+    p10 = fan.get("p10") or []
+    p50 = fan.get("p50") or []
+    p90 = fan.get("p90") or []
+    n = min(len(p10), len(p50), len(p90))
+    return [
+        {
+            "day": i + 1,
+            "month": f"D{i + 1}",
+            "p10": p10[i],
+            "p50": p50[i],
+            "p90": p90[i],
+        }
+        for i in range(n)
+    ]
+
+
 # ── Tier 6: Predictive Risk Simulation Engine ─────────────────────────────────
 
 @app.post("/simulation/run")
@@ -1670,44 +2183,44 @@ async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
       }
     """
     import asyncio
-    from src.simulation.engine import (
-        SimulationRequest, TwinSnapshot, VarianceReduction, run_simulation
-    )
-    from src.simulation.scenario_library import ScenarioSpec
-    from src.simulation.output_emitter import emit_simulation_completed
 
-    user_id = body.get("user_id", "unknown")
+    from src.intervention.negotiation_engine import make_prequalified_offer
+    from src.simulation.engine import (
+        SimulationRequest,
+        TwinSnapshot,
+        VarianceReduction,
+        run_simulation,
+    )
+    from src.simulation.output_emitter import emit_simulation_completed
+    from src.simulation.scenario_library import ScenarioSpec
+    from src.twin.twin_service import TwinService
+
+    user_id = str(body.get("user_id", "")).strip()
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
 
-    # Parse twin snapshot
-    ts_raw = body.get("twin_snapshot", {})
-    twin = TwinSnapshot(
-        income_stability=float(ts_raw.get("income_stability", 0.65)),
-        spending_volatility=float(ts_raw.get("spending_volatility", 0.35)),
-        liquidity_health=ts_raw.get("liquidity_health", "MEDIUM"),
-        risk_score=float(ts_raw.get("risk_score", 0.35)),
-        cash_buffer_days=float(ts_raw.get("cash_buffer_days", 14.0)),
-        emi_monthly=float(ts_raw.get("emi_monthly", 15000.0)),
-        emi_overdue_count=int(ts_raw.get("emi_overdue_count", 0)),
-        cash_balance_current=float(ts_raw.get("cash_balance_current", 40000.0)),
-        cascade_susceptibility=float(ts_raw.get("cascade_susceptibility", 0.45)),
-        persona=ts_raw.get("persona", "unknown"),
-        income_monthly=float(ts_raw.get("income_monthly", 50000.0)),
-        essential_expense_monthly=float(ts_raw.get("essential_expense_monthly", 20000.0)),
-        discretionary_expense_monthly=float(ts_raw.get("discretionary_expense_monthly", 10000.0)),
-        overdraft_limit=float(ts_raw.get("overdraft_limit", 5000.0)),
-    )
+    redis: aioredis.Redis = app.state.redis
+    twin_raw = await redis.get(f"twin:{user_id}")
+    twin_data = json.loads(twin_raw) if twin_raw else {}
+    fv = await _load_latest_feature_vector(redis, user_id)
 
-    # Parse scenario
-    sc_raw = body.get("scenario") or {}
-    scenario = ScenarioSpec(
-        type=sc_raw.get("type", "baseline"),
-        components=sc_raw.get("components", []),
-        start_day=sc_raw.get("start_day", 0),
-        duration_override=sc_raw.get("duration_override"),
-        custom_params=sc_raw.get("custom_params", {}),
+    try:
+        snapshot_data = _build_simulation_snapshot(
+            user_id,
+            twin_data,
+            fv,
+            body.get("twin_snapshot") if isinstance(body.get("twin_snapshot"), dict) else {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    twin = TwinSnapshot(**snapshot_data)
+
+    scenario_dict = _scenario_from_overrides(
+        body.get("scenario") if isinstance(body.get("scenario"), dict) else None,
+        body.get("scenario_overrides") if isinstance(body.get("scenario_overrides"), dict) else None,
     )
+    scenario = ScenarioSpec(**scenario_dict)
 
     vr_raw = body.get("variance_reduction") or {}
     vr = VarianceReduction(
@@ -1731,8 +2244,50 @@ async def run_simulation_endpoint(body: dict[str, Any]) -> dict[str, Any]:
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, run_simulation, req)
 
-    redis: aioredis.Redis = app.state.redis
+    # Backward-compatible + UI-friendly output enrichments.
+    result["tail_risk"] = {
+        "var_95": result.get("var_95"),
+        "cvar_95": result.get("cvar_95"),
+    }
+    result["fan_chart_series"] = _fan_to_series(result.get("fan_chart", {}))
+    result["simulation_windows"] = {
+        "day_30": result.get("temporal_projections", {}).get("day_30", {}),
+        "day_60": result.get("temporal_projections", {}).get("day_60", {}),
+        "day_90": result.get("temporal_projections", {}).get("day_90", {}),
+    }
+
+    crash = result.get("liquidity_crash_days") or {}
+    crash_mean = crash.get("mean")
+    if isinstance(crash_mean, (int, float)):
+        result["liquidity_crash_date_estimate"] = (
+            datetime.utcnow().date() + timedelta(days=int(crash_mean))
+        ).isoformat()
+    else:
+        result["liquidity_crash_date_estimate"] = None
+
     await emit_simulation_completed(redis, user_id, result)
+
+    # Tier 8 proactive offer generation on distress.
+    proactive_offer = None
+    twin_svc = TwinService(redis)
+    live_twin = await twin_svc.get(user_id)
+    if live_twin and (
+        live_twin.liquidity_health == "LOW"
+        or float(result.get("ews", {}).get("ews_14d", 0.0) or 0.0) >= 0.35
+    ):
+        proactive_offer = make_prequalified_offer(live_twin)
+        await twin_svc.update_state_patch(
+            user_id,
+            state_patch={"intent_signals": (live_twin.intent_signals + [{
+                "signal_type": "EMI_STRESS_IMMINENT",
+                "probability": min(0.99, float(result.get("ews", {}).get("ews_30d", 0.5) or 0.5)),
+                "reasoning": "Tier 6 Monte Carlo indicates elevated short-term liquidity stress.",
+                "source_hypothesis": "SIM_ENGINE",
+            }])[:10]},
+        )
+
+    if proactive_offer:
+        result["proactive_offer"] = proactive_offer
 
     return result
 

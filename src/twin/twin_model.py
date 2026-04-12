@@ -170,10 +170,13 @@ class DigitalTwin(BaseModel):
     # Core risk metrics
     risk_score: float = Field(0.5, ge=0.0, le=1.0)
     liquidity_health: LiquidityHealth = "HIGH"
+    liquidity_health_index: float = Field(0.7, ge=0.0, le=1.0)
     income_stability: float = Field(0.5, ge=0.0, le=1.0)
     spending_volatility: float = Field(0.3, ge=0.0, le=1.0)
     cash_buffer_days: float = Field(15.0, ge=0.0, le=90.0)
     emi_burden_ratio: float = Field(0.3, ge=0.0)
+    credit_dependency_score: float = Field(0.3, ge=0.0, le=1.0)
+    peer_deviation_score: float = 0.0
 
     # Financial DNA embedding (32-dim)
     financial_dna: list[float] = Field(default_factory=lambda: [0.0] * DNA_DIM)
@@ -188,7 +191,9 @@ class DigitalTwin(BaseModel):
 
     # Rolling history summaries (last 5 versions, lightweight)
     risk_history: list[float] = Field(default_factory=list)
+    risk_trend_timeseries: list[dict] = Field(default_factory=list)
     feature_history_summary: list[dict] = Field(default_factory=list)
+    predicted_risk_trajectory: list[float] = Field(default_factory=list)
 
     # ── Tier 5 Reasoning Agent outputs ────────────────────────────────────────
     last_narrative: str = ""
@@ -207,6 +212,16 @@ class DigitalTwin(BaseModel):
     @classmethod
     def _cap_feature_summary(cls, v: list[dict]) -> list[dict]:
         return v[-10:] if len(v) > 10 else v
+
+    @field_validator("risk_trend_timeseries", mode="before")
+    @classmethod
+    def _cap_risk_trend(cls, v: list[dict]) -> list[dict]:
+        return v[-365:] if len(v) > 365 else v
+
+    @field_validator("predicted_risk_trajectory", mode="before")
+    @classmethod
+    def _cap_predicted_trajectory(cls, v: list[float]) -> list[float]:
+        return v[:365] if len(v) > 365 else v
 
     # ── derived helpers ───────────────────────────────────────────────────────
 
@@ -239,7 +254,20 @@ class DigitalTwin(BaseModel):
             "risk_score": round(self.risk_score, 4),
             "liquidity_health": self.liquidity_health,
             "income_stability": round(self.income_stability, 4),
+            "credit_dependency_score": round(self.credit_dependency_score, 4),
+            "peer_deviation_score": round(self.peer_deviation_score, 4),
         }
+
+    def append_risk_point(self) -> None:
+        self.risk_trend_timeseries.append(
+            {
+                "ts": self.last_updated.isoformat(),
+                "risk_score": round(self.risk_score, 4),
+                "liquidity_health_index": round(self.liquidity_health_index, 4),
+                "credit_dependency_score": round(self.credit_dependency_score, 4),
+                "peer_deviation_score": round(self.peer_deviation_score, 4),
+            }
+        )
 
     def cibil_like_score(self) -> int:
         """Map risk_score [0,1] → CIBIL-like 300–900 band."""

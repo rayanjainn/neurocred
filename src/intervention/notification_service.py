@@ -44,6 +44,7 @@ def _render_message(trigger: TriggerResult, channel: Channel) -> dict[str, str]:
     """Render a channel-appropriate notification payload."""
     title_map: dict[str, str] = {
         "liquidity_drop": "Cash buffer alert",
+        "prequalified_micro_loan_offer": "Pre-qualified micro-loan",
         "overspend_warning": "Overspend warning",
         "emi_at_risk": "EMI risk alert",
         "lifestyle_inflation": "Spending trend alert",

@@ -1111,6 +1111,23 @@ export const reasoningApi = {
     }),
 };
 
+export const interventionApi = {
+  getOffer: (userId: string) =>
+    apiFetch<Record<string, unknown>>(`/intervention/${userId}/offer`),
+  startNegotiation: (userId: string, body?: Record<string, unknown>) =>
+    apiFetch<Record<string, unknown>>(`/intervention/${userId}/negotiation/start`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+  getNegotiation: (userId: string, sessionId: string) =>
+    apiFetch<Record<string, unknown>>(`/intervention/${userId}/negotiation/${sessionId}`),
+  negotiateTurn: (userId: string, sessionId: string, message: string) =>
+    apiFetch<Record<string, unknown>>(`/intervention/${userId}/negotiation/${sessionId}/turn`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+};
+
 // Vigilance & Vigil (Tier 8)
 export const vigilanceApi = {
   run: (userId: string) => apiFetch<Record<string, unknown>>(`/vigilance/${userId}/run`, { method: "POST" }),

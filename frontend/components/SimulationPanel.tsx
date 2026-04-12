@@ -18,7 +18,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { twinApi, simulationApi } from "@/dib/api";
+import { simulationApi } from "@/dib/api";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -169,37 +169,13 @@ export function SimulationPanel({ userId, score, compact = false }: SimulationPa
     setLoading(true);
     setError(null);
     try {
-      // 1. Fetch real twin data from the backend to ensure no mock data is used
-      const twin: any = await twinApi.get(userId).catch(() => ({}));
-      
-      const regime =
-        score?.risk_band === "high_risk" ? 2 : score?.risk_band === "medium_risk" ? 1 : 0;
-      const riskScore =
-        score?.credit_score
-          ? (900 - score.credit_score) / 600
-          : score?.risk_score ?? 0.35;
-
       const payload = {
         user_id: userId,
-        twin_snapshot: {
-          income_stability: twin.income_stability ?? 1 - (riskScore * 0.6),
-          spending_volatility: twin.spending_volatility ?? riskScore * 0.5,
-          liquidity_health: twin.liquidity_health ?? (regime === 0 ? "HIGH" : regime === 1 ? "MEDIUM" : "LOW"),
-          risk_score: twin.risk_score ?? riskScore,
-          cash_buffer_days: twin.cash_buffer_days ?? (regime === 0 ? 20 : regime === 1 ? 10 : 3),
-          emi_monthly: twin.emi_monthly ?? 15000,
-          emi_overdue_count: twin.emi_overdue_count ?? (regime === 2 ? 2 : regime === 1 ? 1 : 0),
-          cash_balance_current: twin.cash_balance_current ?? (regime === 0 ? 60000 : regime === 1 ? 25000 : 8000),
-          cascade_susceptibility: twin.cascade_susceptibility ?? (0.3 + regime * 0.2),
-          persona: twin.persona ?? (regime === 0 ? "genuine_healthy" : "genuine_struggling"),
-          income_monthly: twin.income_monthly ?? 60000,
-          essential_expense_monthly: twin.essential_expense_monthly ?? 20000,
-          discretionary_expense_monthly: twin.discretionary_expense_monthly ?? 10000,
-          overdraft_limit: twin.overdraft_limit ?? 5000,
-        },
         horizon_days: 90,
         num_simulations: 1000,
-        scenario: null,
+        scenario: score?.risk_band === "high_risk"
+          ? { type: "compound", components: ["C_FULL_STRESS"], start_day: 0 }
+          : null,
         variance_reduction: { sobol: true, antithetic: true },
         run_counterfactual: false,
         seed: null,

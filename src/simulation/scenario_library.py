@@ -41,6 +41,15 @@ ATOMIC_SCENARIOS: dict[str, AtomicScenario] = {
         income_multiplier=0.80,
         duration_days=30,
     ),
+    "S_INC_RISE_20": AtomicScenario(
+        id="S_INC_RISE_20",
+        name="Business expansion uplift",
+        income_multiplier=1.20,
+        essential_expense_multiplier=0.95,
+        discretionary_multiplier=1.10,
+        emi_miss_prob_delta=-0.03,
+        duration_days=45,
+    ),
     "S_INC_DROP_50": AtomicScenario(
         id="S_INC_DROP_50",
         name="Severe income shock",
@@ -227,9 +236,35 @@ def _apply_atomic(
         else:
             inc_mult = atomic.income_multiplier
 
-        resolved.income_multipliers[d] = min(resolved.income_multipliers[d], inc_mult)
-        resolved.ess_exp_multipliers[d] = max(resolved.ess_exp_multipliers[d], atomic.essential_expense_multiplier)
-        resolved.disc_multipliers[d] = min(resolved.disc_multipliers[d], atomic.discretionary_multiplier)
+        if abs(inc_mult - 1.0) > 1e-9:
+            if inc_mult >= 1.0:
+                resolved.income_multipliers[d] = max(resolved.income_multipliers[d], inc_mult)
+            else:
+                resolved.income_multipliers[d] = min(resolved.income_multipliers[d], inc_mult)
+
+        if abs(atomic.essential_expense_multiplier - 1.0) > 1e-9:
+            if atomic.essential_expense_multiplier <= 1.0:
+                resolved.ess_exp_multipliers[d] = min(
+                    resolved.ess_exp_multipliers[d],
+                    atomic.essential_expense_multiplier,
+                )
+            else:
+                resolved.ess_exp_multipliers[d] = max(
+                    resolved.ess_exp_multipliers[d],
+                    atomic.essential_expense_multiplier,
+                )
+
+        if abs(atomic.discretionary_multiplier - 1.0) > 1e-9:
+            if atomic.discretionary_multiplier >= 1.0:
+                resolved.disc_multipliers[d] = max(
+                    resolved.disc_multipliers[d],
+                    atomic.discretionary_multiplier,
+                )
+            else:
+                resolved.disc_multipliers[d] = min(
+                    resolved.disc_multipliers[d],
+                    atomic.discretionary_multiplier,
+                )
         resolved.emi_miss_prob_deltas[d] += atomic.emi_miss_prob_delta
 
     # One-time expense on start_day

@@ -301,6 +301,7 @@ export default function EntityProfilePage() {
             <TimeSeriesPanel
               upiTimeline={result.upi_timeline}
               ewbTimeline={result.ewb_timeline ?? []}
+              twinTimeline={result.twin_timeline ?? []}
               windows={result.windows}
               scoreHistory={result.score_history ?? []}
               title="Transaction Time Series — Full History"

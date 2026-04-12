@@ -258,6 +258,57 @@ airavat/
 │   └── api/          # FastAPI
 ├── scripts/
 │   ├── phase1_generate.sh
+
+---
+
+## 11. Stress Twin Workflow (Multi-Version + Monte Carlo)
+
+Use this to force large risk fluctuations for a user, create many twin versions,
+and run simulation at each step.
+
+```bash
+bash scripts/stress_twin_workflow.sh --user-id u_a22645da --gstin 24IEYIC0868X8Z8
+```
+
+Useful flags:
+
+```bash
+# auto-fix missing feature/twin setup before stress loop
+bash scripts/stress_twin_workflow.sh --user-id u_a22645da --auto-fix
+
+# custom API/Redis and longer experiment
+bash scripts/stress_twin_workflow.sh \
+    --user-id u_a22645da \
+    --api-base http://127.0.0.1:8001 \
+    --redis-url redis://localhost:6379/0 \
+    --steps 12
+```
+
+Note:
+
+- If `/features/<user_id>` returns 404 but `data/features/user_id=<user_id>/features.parquet` exists,
+    the script now auto-seeds `twin:features:<user_id>` in Redis from local parquet before running updates.
+- If `income_30d` is still missing/zero after hydration, simulation will still fail with 422 until upstream
+    ingestion/classification data is available for that user.
+
+### 422 Fix Guidance
+
+If you see:
+
+`Simulation snapshot missing income ... (422)`
+
+it means the backend cannot derive required financial inputs for that user.
+
+Fix sequence:
+
+```bash
+bash scripts/phase3_features.sh
+curl -X POST http://127.0.0.1:8001/twin/bootstrap
+curl http://127.0.0.1:8001/features/<user_id>
+curl -X POST http://127.0.0.1:8001/twin/<user_id>/update
+```
+
+Then rerun simulation or the stress workflow script.
 │   ├── phase2_redis_ingest.sh
 │   ├── phase3_features.sh
 │   ├── phase4_train.sh

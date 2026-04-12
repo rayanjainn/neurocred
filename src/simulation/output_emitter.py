@@ -84,15 +84,34 @@ async def emit_simulation_completed(
 
     regime_dist = sim_result.get("regime_distribution_at_90d", {})
 
-    twin_update = {
+    twin_update_hash = {
         "predicted_risk_trajectory": json.dumps(trajectory),
-        "ews_14d":                   str(ews.get("ews_14d", 0)),
-        "regime_distribution":       json.dumps(regime_dist),
-        "recovery_plan_active":      "true" if sim_result.get("recovery_plan", {}).get("steps") else "false",
-        "fan_chart_cache_key":       fan_key,
-        "last_simulation_id":        sim_id,
+        "ews_14d": str(float(ews.get("ews_14d", 0.0) or 0.0)),
+        "regime_distribution": json.dumps(regime_dist),
+        "recovery_plan_active": "true" if sim_result.get("recovery_plan", {}).get("steps") else "false",
+        "fan_chart_cache_key": fan_key,
+        "last_simulation_id": sim_id,
     }
-    await redis.hset(f"twin:{user_id}", mapping=twin_update)
+    try:
+        await redis.hset(f"twin:{user_id}", mapping=twin_update_hash)
+    except Exception:
+        twin_raw = await redis.get(f"twin:{user_id}")
+        if twin_raw:
+            try:
+                twin_data = json.loads(twin_raw)
+            except json.JSONDecodeError:
+                twin_data = {}
+            twin_data.update(
+                {
+                    "predicted_risk_trajectory": trajectory,
+                    "ews_14d": float(ews.get("ews_14d", 0.0) or 0.0),
+                    "regime_distribution": regime_dist,
+                    "recovery_plan_active": bool(sim_result.get("recovery_plan", {}).get("steps")),
+                    "fan_chart_cache_key": fan_key,
+                    "last_simulation_id": sim_id,
+                }
+            )
+            await redis.set(f"twin:{user_id}", json.dumps(twin_data, default=str))
 
     # ── 5. Publish simulation_completed event ─────────────────────────────────
     event = json.dumps({
