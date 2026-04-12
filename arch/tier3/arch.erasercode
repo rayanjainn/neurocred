@@ -1,35 +1,40 @@
-title Tier 3 - Behavioural Feature and Trend Engine
+title Tier 3 - Infra and Tool Architecture
 
 direction right
 
-Input [icon: inbox, color: teal] {
-  Typed Stream [icon: layers, label: "stream:typed_events"]
+Ingestion Runtime [icon: server, color: teal] {
+  Redis Feature Worker [icon: radio, label: "XREADGROUP on stream:typed_events"]
+  Per-User Event Store [icon: database, label: "bounded deque MAX_EVENTS_PER_USER"]
 }
 
-Feature Core [icon: cpu, color: purple] {
-  Event Store [icon: clock, label: "per-user bounded history"]
-  Rolling Metrics [icon: activity, label: "cashflow, liquidity, burden\nstability, volatility"]
-  Pattern Signals [icon: repeat, label: "salary spike, inflation trend\ncategory shift"]
+Feature Compute Stack [icon: cpu, color: purple] {
+  Polars Frame Builder [icon: file-text, label: "90d/30d/7d filtered frames"]
+  EMA Engine [icon: activity, label: "half-life 30d\nlambda=ln(2)/30"]
+  Ratio and Trend Engine [icon: bar-chart-2, label: "burden/savings/stability/volatility\nspike/inflation/category shift"]
+  Cohort Registry [icon: users, label: "peer_cohorts.parquet lookup\nz-score deviation"]
 }
 
-Stat Layer [icon: bar-chart-2, color: orange] {
-  KNN Imputer [icon: toolbox, label: "sparse field repair"]
-  Isolation Forest [icon: alert-triangle, label: "temporal anomalies"]
-  Cohort Benchmark [icon: users, label: "peer z-score deviation"]
+Batch Correction Stack [icon: toolbox, color: orange] {
+  sklearn KNNImputer [icon: tool, label: "missing numeric feature repair"]
+  sklearn IsolationForest [icon: alert-triangle, label: "temporal anomaly flag"]
 }
 
-Output [icon: send, color: green] {
+Output and Storage [icon: send, color: green] {
   Feature Stream [icon: layers, label: "stream:behavioural_features"]
-  Feature Cache [icon: database, label: "twin:features:{user_id}"]
-  Feature Parquet [icon: archive, label: "data/features/user_id=*\nfeatures.parquet"]
+  Redis Feature Cache [icon: hard-drive, label: "twin:features:{user_id}"]
+  Feature Parquet Sink [icon: archive, label: "data/features/user_id=*/features.parquet"]
+  Cohort Builder Job [icon: refresh-cw, label: "peer_cohort.py -> peer_cohorts.parquet"]
 }
 
-Typed Stream --> Event Store: consume + parse
-Event Store --> Rolling Metrics: compute windows
-Rolling Metrics --> Pattern Signals: derive behavior deltas
-Pattern Signals --> KNN Imputer: offline correction
-KNN Imputer --> Isolation Forest: anomaly flagging
-Isolation Forest --> Cohort Benchmark: deviation scoring
-Cohort Benchmark --> Feature Stream: publish vector
-Cohort Benchmark --> Feature Cache: store latest
-Cohort Benchmark --> Feature Parquet: persist partition
+Redis Feature Worker --> Per-User Event Store: ingest typed events
+Per-User Event Store --> Polars Frame Builder: build windows
+Polars Frame Builder --> EMA Engine: throughput and decay stats
+EMA Engine --> Ratio and Trend Engine: compute feature vector
+Ratio and Trend Engine --> Cohort Registry: apply peer benchmarking
+Cohort Registry --> Feature Stream: publish BehaviouralFeatureVector
+Cohort Registry --> Redis Feature Cache: latest per user
+Cohort Registry --> Feature Parquet Sink: batch persistence
+Feature Parquet Sink --> sklearn KNNImputer: offline correction
+sklearn KNNImputer --> sklearn IsolationForest: anomaly tagging
+sklearn IsolationForest --> Feature Parquet Sink: corrected feature output
+Feature Parquet Sink --> Cohort Builder Job: rebuild cohort baselines

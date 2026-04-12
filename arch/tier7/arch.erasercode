@@ -1,46 +1,47 @@
-title Tier 7 - Credit Scoring, Explainability, and Recalibration
+title Tier 7 - Infra and Tool Architecture
 
 direction right
 
-Inputs [icon: inbox, color: teal] {
-  Score Request Stream [icon: layers, label: "stream:credit_score_requests"]
-  Feature Vector [icon: file-text, label: "Tier 3 features"]
-  Twin Trajectory [icon: trending-up, label: "Tier 4 risk history delta"]
+Request Infra [icon: server, color: teal] {
+  Credit Request Stream [icon: layers, label: "stream:credit_score_requests"]
+  Saga Worker [icon: radio, label: "XREADGROUP scoring_worker"]
+  Task Progress Channel [icon: bell, label: "updates:{task_id}"]
 }
 
-Scoring Core [icon: cpu, color: purple] {
-  Router [icon: git-branch, label: "full vs income-heavy model"]
-  XGBoost Scorer [icon: activity, label: "PD -> score 300..900"]
-  EL Sizing [icon: calculator, label: "loan amount / APR / tenure"]
-  Rule Trace Builder [icon: list, label: "threshold pass/fail audit"]
+Model Stack [icon: cpu, color: purple] {
+  Dual XGBoost Models [icon: activity, label: "xgb_digital_twin.ubj\n+ income_heavy.ubj"]
+  Sparse Matrix Router [icon: git-branch, label: "CSR if sparsity > 50%"]
+  PD-to-Score Mapper [icon: calculator, label: "score = 900 - PD*600"]
+  EL Sizing Engine [icon: target, label: "loan sizing via EL cap + LGD"]
+  Trajectory Override [icon: trending-up, label: "Tier 4 improving trend boost"]
 }
 
-Explainability [icon: search, color: orange] {
-  SHAP Explainer [icon: bar-chart-2, label: "top-5 + waterfall"]
+Explainability Stack [icon: search, color: orange] {
+  SHAP TreeExplainer [icon: bar-chart-2, label: "top-5 contributions"]
+  Waterfall Builder [icon: area-chart, label: "base value + additive effects"]
+  Rule Trace Generator [icon: file-text, label: "per-threshold decision audit"]
 }
 
-Persistence [icon: database, color: green] {
-  Task Hash [icon: hard-drive, label: "score:{task_id}"]
-  Credit State [icon: hard-drive, label: "credit:user:{user_id}"]
-  Active Set [icon: users, label: "credit:active"]
-  Progress Channel [icon: radio, label: "updates:{task_id}"]
+State and Maintenance [icon: database, color: green] {
+  Task Hash Store [icon: hard-drive, label: "score:{task_id}"]
+  User Credit Store [icon: hard-drive, label: "credit:user:{user_id}"]
+  Active User Set [icon: users, label: "credit:active"]
+  APScheduler 24h Sweep [icon: clock, label: "recalibration.py"]
+  Credit Events Channel [icon: radio, label: "LIMIT_REDUCED_EVENT"]
 }
 
-Maintenance [icon: refresh-cw, color: gray] {
-  Recalibration Sweep [icon: clock, label: "24h interval"]
-  Limit Event [icon: bell, label: "LIMIT_REDUCED_EVENT"]
-}
-
-Score Request Stream --> Router: consume request
-Feature Vector --> Router: load latest user features
-Twin Trajectory --> XGBoost Scorer: apply trajectory override
-Router --> XGBoost Scorer: choose model
-XGBoost Scorer --> EL Sizing: compute offer sizing
-EL Sizing --> Rule Trace Builder: build audit trace
-Rule Trace Builder --> SHAP Explainer: compute attributions
-SHAP Explainer --> Task Hash: persist result payload
-Task Hash --> Credit State: update latest state
-Credit State --> Active Set: register active user
-Task Hash --> Progress Channel: publish status
-Active Set --> Recalibration Sweep: periodic refresh input
-Recalibration Sweep --> Limit Event: publish reductions
+Credit Request Stream --> Saga Worker: consume scoring job
+Saga Worker --> Dual XGBoost Models: load and infer
+Saga Worker --> Sparse Matrix Router: choose data format
+Sparse Matrix Router --> PD-to-Score Mapper: compute score band
+PD-to-Score Mapper --> EL Sizing Engine: calculate offer limits
+Trajectory Override --> PD-to-Score Mapper: apply behavior boost
+EL Sizing Engine --> SHAP TreeExplainer: explain prediction
+SHAP TreeExplainer --> Waterfall Builder: build explanation payload
+Waterfall Builder --> Rule Trace Generator: attach machine trace
+Rule Trace Generator --> Task Hash Store: persist task result
+Task Hash Store --> Task Progress Channel: stream status updates
+Task Hash Store --> User Credit Store: update latest credit state
+User Credit Store --> Active User Set: register user for sweep
+Active User Set --> APScheduler 24h Sweep: schedule recalibration
+APScheduler 24h Sweep --> Credit Events Channel: emit limit reduction alerts

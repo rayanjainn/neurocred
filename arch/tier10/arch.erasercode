@@ -1,37 +1,48 @@
-title Tier 10 - Compliance, What-If, and Regulatory Reporting
+title Tier 10 - Infra and Tool Architecture
 
 direction right
 
-Inputs [icon: inbox, color: teal] {
-  Tier 4 Twin Data [icon: user, label: "current state + history"]
-  Tier 5 Reasoning [icon: message-square, label: "cot trace + narrative"]
-  Tier 6 Simulation [icon: activity, label: "result + ews + fan chart"]
-  Tier 7 Credit Data [icon: bar-chart-2, label: "decisions + limits"]
-  Tier 8 Audit Data [icon: shield, label: "triggers + notifications + chat"]
-  Tier 9 Vigilance [icon: alert-triangle, label: "deception + module outputs"]
+Evidence Inputs [icon: inbox, color: teal] {
+  Twin State and History [icon: user, label: "Tier 4 snapshots"]
+  Reasoning Traces [icon: message-square, label: "Tier 5 result + CoT"]
+  Simulation Artifacts [icon: activity, label: "Tier 6 sim + ews + fan"]
+  Credit Decisions [icon: bar-chart-2, label: "Tier 7 score records"]
+  Intervention and Audit [icon: shield, label: "Tier 8 triggers/chats/notifications"]
+  Vigilance Outputs [icon: alert-triangle, label: "Tier 9 fraud/deception payload"]
 }
 
-Tier 10 Core [icon: cpu, color: purple] {
-  Bundle Collector [icon: layers, label: "collect and normalize artifacts"]
-  JSON Report Builder [icon: file-text, label: "full machine-readable bundle"]
-  PDF Renderer [icon: file, label: "compact compliance summary"]
-  Live What-If Orchestrator [icon: play, label: "scenario -> simulation -> state delta"]
+Tier10 Service Stack [icon: cpu, color: purple] {
+  Bundle Collector [icon: layers, label: "collect multi-tier evidence"]
+  Normalization Layer [icon: tool, label: "null-safe section shaping"]
+  JSON Report Builder [icon: file-text, label: "machine-readable compliance bundle"]
+  PDF Primitive Renderer [icon: file, label: "single-page PDF via raw primitives"]
+  Live What-If Orchestrator [icon: play, label: "scenario overrides -> simulation run"]
 }
 
-Outputs [icon: send, color: green] {
-  JSON Export [icon: download, label: "GET /tier10/report/{user}?format=json"]
-  PDF Export [icon: download, label: "GET /tier10/report/{user}?format=pdf"]
-  Live What-If [icon: monitor, label: "POST /tier10/whatif/live"]
+Interfaces [icon: terminal, color: orange] {
+  GET tier10 report json [icon: download, label: "/tier10/report/{user}?format=json"]
+  GET tier10 report pdf [icon: download, label: "/tier10/report/{user}?format=pdf"]
+  POST tier10 whatif live [icon: monitor, label: "/tier10/whatif/live"]
 }
 
-Tier 4 Twin Data --> Bundle Collector: include state timeline
-Tier 5 Reasoning --> Bundle Collector: include cot and flags
-Tier 6 Simulation --> Bundle Collector: include stress artifacts
-Tier 7 Credit Data --> Bundle Collector: include decision evidence
-Tier 8 Audit Data --> Bundle Collector: include interventions
-Tier 9 Vigilance --> Bundle Collector: include deception output
-Bundle Collector --> JSON Report Builder: assemble full bundle
-JSON Report Builder --> JSON Export: return structured evidence
-JSON Report Builder --> PDF Renderer: render compact lines
-PDF Renderer --> PDF Export: return downloadable pdf
-Live What-If Orchestrator --> Live What-If: return updated state and sla
+Output Contracts [icon: send, color: green] {
+  Regulatory Audit Bundle [icon: archive, label: "cross-tier evidence object"]
+  Compact PDF Summary [icon: file-text, label: "human-readable compliance digest"]
+  Live Delta Payload [icon: refresh-cw, label: "latency/sla + updated twin/risk/limit"]
+}
+
+Twin State and History --> Bundle Collector: fetch twin evidence
+Reasoning Traces --> Bundle Collector: fetch explanation evidence
+Simulation Artifacts --> Bundle Collector: fetch stress evidence
+Credit Decisions --> Bundle Collector: fetch decision evidence
+Intervention and Audit --> Bundle Collector: fetch communication evidence
+Vigilance Outputs --> Bundle Collector: fetch anomaly evidence
+Bundle Collector --> Normalization Layer: standardize sections
+Normalization Layer --> JSON Report Builder: build audit json
+JSON Report Builder --> Regulatory Audit Bundle: final structured output
+JSON Report Builder --> PDF Primitive Renderer: derive report lines
+PDF Primitive Renderer --> Compact PDF Summary: return pdf bytes
+Live What-If Orchestrator --> POST tier10 whatif live: execute live scenario
+JSON Report Builder --> GET tier10 report json: api response
+PDF Primitive Renderer --> GET tier10 report pdf: api response
+POST tier10 whatif live --> Live Delta Payload: updated state and sla contract

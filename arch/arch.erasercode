@@ -1,91 +1,64 @@
-title Airavat Unified Architecture - Tiers 1 to 10
+title Airavat Unified Infra and Tool Architecture - Tiers 1 to 10
 
 direction right
 
-Tier 1 [icon: package, color: teal] {
-  Ingestion and Canonicalization [icon: database, label: "generator + schemas + redis producer\nstream:raw_ingestion"]
+Runtime Plane [icon: server, color: teal] {
+  FastAPI Control Surface [icon: terminal, label: "src/api/main.py + portal_routes.py"]
+  Worker Fleet [icon: users, label: "classifier worker\nfeature worker\ncredit scoring worker\nintervention agent"]
 }
 
-Tier 2 [icon: cpu, color: purple] {
-  Semantic Classifier [icon: zap, label: "rules + MiniLM\nstream:typed_events"]
+Data Plane [icon: database, color: gray] {
+  Redis Streams [icon: layers, label: "raw_ingestion, typed_events, behavioural_features\ncredit_requests, reasoning_events, vigilance_events, notifications"]
+  Redis PubSub [icon: radio, label: "twin_updated, simulation_completed\nupdates:{task_id}, credit_events"]
+  Redis Keyspaces [icon: hard-drive, label: "twin, features, score, credit, sim, tier5, tier8, tier9, audit"]
+  Parquet Lake [icon: archive, label: "data/raw + data/features partitions"]
 }
 
-Tier 3 [icon: activity, color: orange] {
-  Feature Engine [icon: bar-chart-2, label: "rolling windows + cohort deviation\nstream:behavioural_features"]
+Tool and Algorithm Plane [icon: cpu, color: purple] {
+  Tier1 Synth [icon: package, label: "Faker + NumPy + optional SDV + Polars"]
+  Tier2 Semantics [icon: zap, label: "Regex rules + MiniLM + cosine similarity"]
+  Tier3 Features [icon: bar-chart-2, label: "Polars windows + EMA + KNNImputer + IsolationForest"]
+  Tier4 Twin [icon: user, label: "Pydantic state + deterministic 32-d DNA projection"]
+  Tier5 Reasoning [icon: message-square, label: "z-test/LCI contradiction + OpenRouter CoT + fallback"]
+  Tier6 Simulation [icon: shuffle, label: "Monte Carlo + Markov regime + GARCH + copula shocks"]
+  Tier7 Credit [icon: trending-up, label: "Dual XGBoost + SHAP + APScheduler recalibration"]
+  Tier8 Intervention [icon: bell, label: "trigger relevance + negotiation simulator + audit zsets"]
+  Tier9 Vigilance [icon: shield, label: "NetworkX SCC/cycles/PageRank + Bayesian scam + JS drift"]
+  Tier10 Compliance [icon: check-square, label: "cross-tier bundle collector + JSON/PDF export + live what-if"]
 }
 
-Tier 4 [icon: user, color: green] {
-  Digital Twin Core [icon: git-branch, label: "versioned state + financial dna\npubsub: twin_updated"]
+Tier Dependencies [icon: git-branch, color: orange] {
+  Tier1To2 [icon: arrow-right, label: "canonical events"]
+  Tier2To3 [icon: arrow-right, label: "typed events"]
+  Tier3ToCore [icon: arrow-right, label: "features -> twin/sim/score/vigilance"]
+  TwinToReasoningIntervention [icon: arrow-right, label: "twin state -> tier5/tier8"]
+  AllToTier10 [icon: arrow-right, label: "evidence aggregation"]
 }
 
-Tier 5 [icon: message-square, color: blue] {
-  Reasoning Engine [icon: file-text, label: "contradiction + cot + interrogation\nstream:reasoning_events"]
-}
+FastAPI Control Surface --> Worker Fleet: starts and coordinates runtime services
+Worker Fleet --> Redis Streams: consume and publish stream workloads
+Worker Fleet --> Redis PubSub: publish event notifications
+Worker Fleet --> Redis Keyspaces: persist operational states
+Tier1 Synth --> Parquet Lake: write raw partitions
+Tier3 Features --> Parquet Lake: write feature partitions
+Parquet Lake --> Tier7 Credit: model training input
 
-Tier 6 [icon: shuffle, color: pink] {
-  Simulation Engine [icon: area-chart, label: "monte carlo + ews + tail risk\nsim:* caches"]
-}
-
-Tier 7 [icon: trending-up, color: yellow] {
-  Credit Engine [icon: calculator, label: "dual xgboost + shap + recalibration\nstream:credit_score_requests"]
-}
-
-Tier 8 [icon: bell, color: red] {
-  Intervention Layer [icon: send, label: "triggers + negotiation + dialogue\naudit logging"]
-}
-
-Tier 9 [icon: shield, color: gray] {
-  Vigilance Layer [icon: alert-triangle, label: "fraud/scam/bot/stress/shift\nstream:vigilance_events"]
-}
-
-Tier 10 [icon: check-square, color: cyan] {
-  Compliance and What-If [icon: archive, label: "audit bundle + json/pdf export\nlive what-if"]
-}
-
-Control Plane [icon: terminal, color: black] {
-  FastAPI Gateway [icon: command, label: "src/api/main.py\nportal_routes.py"]
-}
-
-Data Stores [icon: hard-drive, color: gray] {
-  Redis Backbone [icon: database, label: "streams + pubsub + keyspaces"]
-  Parquet Stores [icon: archive, label: "data/raw and data/features"]
-}
-
-Tier 1 --> Tier 2: canonical events
-Tier 2 --> Tier 3: typed events
-Tier 3 --> Tier 4: behavioural features
-Tier 4 --> Tier 5: twin state and history
-Tier 4 --> Tier 6: simulation snapshot context
-Tier 3 --> Tier 7: score feature vectors
-Tier 4 --> Tier 8: twin_updated events
-Tier 3 --> Tier 9: vigilance feature inputs
-Tier 4 --> Tier 10: twin evidence
-Tier 5 --> Tier 10: reasoning traces
-Tier 6 --> Tier 10: simulation artifacts
-Tier 7 --> Tier 10: credit decisions
-Tier 8 --> Tier 10: intervention and audit logs
-Tier 9 --> Tier 10: anomaly and deception results
-
-FastAPI Gateway --> Tier 1: ingestion APIs
-FastAPI Gateway --> Tier 4: twin APIs
-FastAPI Gateway --> Tier 5: reasoning APIs
-FastAPI Gateway --> Tier 6: simulation APIs
-FastAPI Gateway --> Tier 7: credit APIs
-FastAPI Gateway --> Tier 8: intervention APIs
-FastAPI Gateway --> Tier 9: vigilance APIs
-FastAPI Gateway --> Tier 10: reporting APIs
-
-Tier 1 --> Redis Backbone: publish streams
-Tier 2 --> Redis Backbone: consume and publish
-Tier 3 --> Redis Backbone: consume and publish
-Tier 4 --> Redis Backbone: persist twin + history
-Tier 5 --> Redis Backbone: cache result + sessions
-Tier 6 --> Redis Backbone: cache simulation artifacts
-Tier 7 --> Redis Backbone: queue and score states
-Tier 8 --> Redis Backbone: negotiation + audit + notifications
-Tier 9 --> Redis Backbone: vigilance cache and events
-Tier 10 --> Redis Backbone: collect evidence
-
-Tier 1 --> Parquet Stores: raw chunks
-Tier 3 --> Parquet Stores: feature partitions
-Tier 7 --> Parquet Stores: model training input
+Tier1 Synth --> Tier1To2: produce canonical events
+Tier1To2 --> Tier2 Semantics: semantic enrichment stage
+Tier2 Semantics --> Tier2To3: publish typed events
+Tier2To3 --> Tier3 Features: feature computation stage
+Tier3 Features --> Tier3ToCore: provide behavioural vectors
+Tier3ToCore --> Tier4 Twin: update digital twin
+Tier3ToCore --> Tier6 Simulation: build simulation snapshots
+Tier3ToCore --> Tier7 Credit: score user credit
+Tier3ToCore --> Tier9 Vigilance: run vigilance detectors
+Tier4 Twin --> TwinToReasoningIntervention: publish twin context
+TwinToReasoningIntervention --> Tier5 Reasoning: generate narratives and flags
+TwinToReasoningIntervention --> Tier8 Intervention: trigger interventions
+Tier4 Twin --> AllToTier10: twin evidence
+Tier5 Reasoning --> AllToTier10: reasoning evidence
+Tier6 Simulation --> AllToTier10: simulation evidence
+Tier7 Credit --> AllToTier10: credit evidence
+Tier8 Intervention --> AllToTier10: intervention and audit evidence
+Tier9 Vigilance --> AllToTier10: vigilance evidence
+AllToTier10 --> Tier10 Compliance: assemble compliance outputs

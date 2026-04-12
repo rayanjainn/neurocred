@@ -1,31 +1,39 @@
-title Tier 1 - Signal Ingestion and Canonicalization
+title Tier 1 - Infra and Tool Architecture
 
 direction right
 
-Sources [icon: database, color: teal] {
-  Persona Generator [icon: activity, label: "generator.py\nprofiles + timelines"]
-  Raw Event Fabricator [icon: package, label: "bank/upi/sms/emi/ob\ngst/ewb style events"]
+Data Synth Stack [icon: package, color: teal] {
+  Faker en_IN [icon: tool, label: "merchant/profile text synthesis"]
+  NumPy RNG [icon: activity, label: "lognormal amounts\ninter-arrival sampling"]
+  SDV GaussianCopula [icon: cpu, label: "optional correlated profile generation"]
+  Polars Writer [icon: database, label: "chunked parquet writer"]
 }
 
-Schema Layer [icon: check-square, color: orange] {
-  Canonical Models [icon: file-text, label: "schemas.py\nCanonicalEvent + source models"]
-  Provenance Mapper [icon: tag, label: "source_provenance\nstatus/channel normalization"]
+Schema and Validation [icon: check-square, color: orange] {
+  Pydantic Models [icon: file-text, label: "BankTransaction/UPI/SMS/EMI/...\nCanonicalEvent"]
+  Provenance Normalizer [icon: tag, label: "source_provenance + status + channel"]
 }
 
-Transport Layer [icon: layers, color: purple] {
-  Redis Producer [icon: send, label: "redis_producer.py\nXADD batched publish"]
-  Unified Stream [icon: inbox, label: "stream:raw_ingestion"]
-  Source Streams [icon: git-branch, label: "stream:bank, upi, sms, emi, ob, voice"]
+Transport Infra [icon: layers, color: purple] {
+  Redis asyncio Client [icon: radio, label: "redis.asyncio"]
+  XADD Batch Publisher [icon: send, label: "pipeline transaction=False\nBATCH_SIZE writes"]
+  Consumer Group Bootstrap [icon: users, label: "XGROUP create classifier + feature groups"]
+  Unified Ingestion Stream [icon: inbox, label: "stream:raw_ingestion"]
+  Source Streams [icon: git-branch, label: "stream:bank/upi/sms/emi/ob/voice"]
 }
 
-Offline Store [icon: archive, color: gray] {
-  Raw Parquets [icon: database, label: "data/raw/*.parquet"]
+Offline Persistence [icon: archive, color: gray] {
+  Raw Partitions [icon: hard-drive, label: "data/raw/*_chunk_*.parquet"]
 }
 
-Persona Generator --> Raw Event Fabricator: synthesize events
-Raw Event Fabricator --> Canonical Models: map to canonical shape
-Canonical Models --> Provenance Mapper: enforce contract
-Provenance Mapper --> Redis Producer: serialized fields
-Redis Producer --> Unified Stream: publish for Tier 2
-Redis Producer --> Source Streams: publish by provenance
-Raw Event Fabricator --> Raw Parquets: write chunked snapshots
+Faker en_IN --> SDV GaussianCopula: profile priors
+NumPy RNG --> SDV GaussianCopula: stochastic drivers
+SDV GaussianCopula --> Polars Writer: generated rows
+Polars Writer --> Raw Partitions: persist raw data lake
+Polars Writer --> Pydantic Models: map source rows
+Pydantic Models --> Provenance Normalizer: enforce canonical contract
+Provenance Normalizer --> Redis asyncio Client: serialize fields
+Redis asyncio Client --> XADD Batch Publisher: stream publish
+XADD Batch Publisher --> Unified Ingestion Stream: tier2 input
+XADD Batch Publisher --> Source Streams: source-specific taps
+Redis asyncio Client --> Consumer Group Bootstrap: ensure workers can consume

@@ -1,47 +1,50 @@
-title Tier 9 - Vigilance, Anomaly, and Deception Detection
+title Tier 9 - Infra and Tool Architecture
 
 direction right
 
 Inputs [icon: inbox, color: teal] {
-  Behavioural Features [icon: file-text, label: "Tier 3 vector"]
-  UPI/EWB Events [icon: database, label: "optional transaction batches"]
-  SMS/Voice Text [icon: message-circle, label: "optional scam text signals"]
+  Tier 3 Features [icon: file-text, label: "BehaviouralFeatureVector"]
+  UPI and EWB Events [icon: database, label: "transaction graph evidence"]
+  SMS/Voice Text [icon: message-circle, label: "social engineering evidence"]
 }
 
-Vigilance Modules [icon: cpu, color: purple] {
-  Fraud Ring Detector [icon: share-2, label: "graph SCC + cycles + PageRank"]
-  Scam Detector [icon: alert-triangle, label: "urgency/authority/otp + Bayes"]
-  Bot Detector [icon: bot, label: "precision timing + hub-spoke + mule DNA"]
-  Stress Detector [icon: activity, label: "logistic rolling stress"]
-  Income Underreport [icon: bar-chart, label: "cohort-normalized sigmoid score"]
-  Identity Shift [icon: shuffle, label: "JS divergence + behavior change"]
+Detection Stack [icon: cpu, color: purple] {
+  NetworkX Graph Engine [icon: share-2, label: "MultiDiGraph + SCC + simple_cycles"]
+  Temporal Consistency Filter [icon: clock, label: "monotonic cycle edge timing"]
+  PageRank Hub Detector [icon: target, label: "shell hub likelihood"]
+  Bayesian Scam Classifier [icon: bar-chart-2, label: "urgency + authority + otp signals"]
+  Bot and Mule Heuristics [icon: bot, label: "interval CV + hub-spoke + mule DNA"]
+  Logistic Stress Model [icon: activity, label: "rolling stress confidence"]
+  Income Underreport Sigmoid [icon: calculator, label: "observed vs declared vs cohort std"]
+  Identity Shift JS Divergence [icon: shuffle, label: "category drift + discretionary shift"]
 }
 
-Aggregation [icon: git-merge, color: orange] {
-  Risk Aggregator [icon: layers, label: "overall risk level"]
-  Deception Score [icon: target, label: "weighted composite 0..1"]
+Aggregation Infra [icon: git-merge, color: orange] {
+  Risk Level Aggregator [icon: layers, label: "LOW/MEDIUM/HIGH/CRITICAL"]
+  Deception Scorer [icon: alert-triangle, label: "weighted module composite"]
 }
 
-Outputs [icon: send, color: green] {
-  Tier9 Cache [icon: database, label: "tier9:result:{user_id}"]
-  Vigilance Stream [icon: layers, label: "stream:vigilance_events"]
-  Summary Flags [icon: flag, label: "fraud/scam/bot/stress/shift"]
+Persistence and Events [icon: database, color: green] {
+  Tier9 Cache [icon: hard-drive, label: "tier9:result:{user_id} TTL"]
+  Vigilance Event Stream [icon: layers, label: "stream:vigilance_events"]
+  Summary API Payload [icon: file-text, label: "lightweight dashboard summary"]
 }
 
-Behavioural Features --> Fraud Ring Detector: contextual inputs
-UPI/EWB Events --> Fraud Ring Detector: graph edges
-SMS/Voice Text --> Scam Detector: text evidence
-UPI/EWB Events --> Bot Detector: network and timing evidence
-Behavioural Features --> Stress Detector: rolling indicators
-Behavioural Features --> Income Underreport: observed vs declared
-Behavioural Features --> Identity Shift: drift signals
-Fraud Ring Detector --> Risk Aggregator: module risk
-Scam Detector --> Risk Aggregator: module risk
-Bot Detector --> Risk Aggregator: module risk
-Stress Detector --> Risk Aggregator: module risk
-Income Underreport --> Risk Aggregator: module risk
-Identity Shift --> Risk Aggregator: module risk
-Risk Aggregator --> Deception Score: compute composite
-Deception Score --> Tier9 Cache: persist full result
-Deception Score --> Vigilance Stream: emit events
-Risk Aggregator --> Summary Flags: publish lightweight outputs
+UPI and EWB Events --> NetworkX Graph Engine: build temporal graph
+NetworkX Graph Engine --> Temporal Consistency Filter: validate cycles
+Temporal Consistency Filter --> PageRank Hub Detector: score graph risk
+SMS/Voice Text --> Bayesian Scam Classifier: classify social engineering
+UPI and EWB Events --> Bot and Mule Heuristics: detect synthetic behavior
+Tier 3 Features --> Logistic Stress Model: compute stress trend
+Tier 3 Features --> Income Underreport Sigmoid: estimate underreporting
+Tier 3 Features --> Identity Shift JS Divergence: compute drift score
+PageRank Hub Detector --> Risk Level Aggregator: module risk
+Bayesian Scam Classifier --> Risk Level Aggregator: module risk
+Bot and Mule Heuristics --> Risk Level Aggregator: module risk
+Logistic Stress Model --> Risk Level Aggregator: module risk
+Income Underreport Sigmoid --> Risk Level Aggregator: module risk
+Identity Shift JS Divergence --> Risk Level Aggregator: module risk
+Risk Level Aggregator --> Deception Scorer: compute final deception score
+Deception Scorer --> Tier9 Cache: persist full result
+Deception Scorer --> Vigilance Event Stream: emit vigilance events
+Risk Level Aggregator --> Summary API Payload: expose compact dashboard output
