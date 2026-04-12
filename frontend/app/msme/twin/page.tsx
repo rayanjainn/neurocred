@@ -744,10 +744,10 @@ export default function MsmeTwinPage() {
             <section>
               <h2>Snapshot</h2>
               <div class="grid">
-                <div class="card"><div class="label">Credit Score</div><div class="value">${escapeHtml(String(score?.credit_score ?? "-"))}</div></div>
-                <div class="card"><div class="label">Risk Band</div><div class="value">${escapeHtml(String(score?.risk_band ?? "-").replace(/_/g, " "))}</div></div>
+                <div class="card"><div class="label">Credit Score</div><div class="value">${escapeHtml(String(twinScore || "-"))}</div></div>
+                <div class="card"><div class="label">Risk Band</div><div class="value">${escapeHtml(String(twinRiskBand || "-").replace(/_/g, " "))}</div></div>
                 <div class="card"><div class="label">Twin Risk Score</div><div class="value">${escapeHtml(twin ? `${Math.round((twin.risk_score ?? 0) * 100)}%` : "-")}</div></div>
-                <div class="card"><div class="label">Recommended WC</div><div class="value">${escapeHtml(score?.recommended_wc_amount ? fmtINR(score.recommended_wc_amount) : "-")}</div></div>
+                <div class="card"><div class="label">Recommended WC</div><div class="value">${escapeHtml(derivedWc ? fmtINR(derivedWc) : "-")}</div></div>
               </div>
             </section>
 
