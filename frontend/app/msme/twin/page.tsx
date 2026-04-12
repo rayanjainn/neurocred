@@ -2,9 +2,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/dib/authContext";
-import { twinApi, simulationApi, reasoningApi, adminApi, interventionApi } from "@/dib/api";
+import { twinApi, simulationApi, reasoningApi, adminApi, interventionApi, scoreApi } from "@/dib/api";
 import { PageHeader } from "@/components/shared";
 import { TimeSeriesPanel } from "@/components/TimeSeriesPanel";
+import { ComplianceSnapshotGrid } from "@/components/compliance/ComplianceSnapshotGrid";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ import {
   GitBranch, Activity, Download, Play, TrendingUp,
   CheckCircle2, AlertTriangle, Loader2, Brain, ChevronDown, ChevronRight,
   Zap, RefreshCw, BarChart3, FileText, MessageSquare, Send, Clock3,
+  Shield,
 } from "lucide-react";
 import {
   LineChart, Line, AreaChart, Area,
@@ -133,9 +135,10 @@ export default function MsmeTwinPage() {
   const [triggers, setTriggers] = useState<any[]>([]);
   const [cot, setCot] = useState<any>(null);
   const [explorerData, setExplorerData] = useState<any>(null);
+  const [dashboardScore, setDashboardScore] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [explorerLoading, setExplorerLoading] = useState(false);
-  const [tab, setTab] = useState("timeline");
+  const [tab, setTab] = useState("overview");
 
   // Simulation
   const [incomeChg, setIncomeChg] = useState([0]);
@@ -176,6 +179,17 @@ export default function MsmeTwinPage() {
     if (!user) return;
     setLoading(true);
     try {
+      let liveDashboardScore: any = null;
+      if (typeof window !== "undefined" && user?.gstin) {
+        const taskId = window.sessionStorage.getItem(`msme_task_${user.gstin}`);
+        if (taskId) {
+          const scoreData = await scoreApi.get(taskId).catch(() => null);
+          if ((scoreData as any)?.status === "complete") {
+            liveDashboardScore = scoreData;
+          }
+        }
+      }
+
       const [tw, hist, trig, cotData] = await Promise.all([
         twinApi.get(user.id).catch(() => null),
         twinApi.getHistory(user.id).catch(() => []),
@@ -205,6 +219,7 @@ export default function MsmeTwinPage() {
       triggerSignatureRef.current = signature;
       triggerBootstrappedRef.current = true;
       setCot(resolvedCot);
+      setDashboardScore(liveDashboardScore);
     } finally {
       setLoading(false);
     }
@@ -302,13 +317,27 @@ export default function MsmeTwinPage() {
     return () => clearInterval(timer);
   }, [user, negSession?.session_id]);
 
-  const twinScore = Number(twin?.cibil_like_score ?? 0);
-  const twinRisk = Number(twin?.risk_score ?? 0);
-  const twinRiskBand =
-    twinRisk <= 0.30 ? "low_risk" : twinRisk <= 0.60 ? "medium_risk" : "high_risk";
-  const derivedWc = twinScore
-    ? Math.max(50_000, Math.min(50_00_000, Math.round(((twinScore - 300) / 600) * 50_00_000)))
-    : null;
+  const latestScore = (dashboardScore?.status === "complete"
+    ? dashboardScore
+    : twin?.latest_score) ?? null;
+  const twinScore = Number(latestScore?.credit_score ?? twin?.cibil_like_score ?? 0);
+  const twinRiskRaw = Number(twin?.risk_score ?? 0);
+  const twinRiskFromScore = twinScore > 0
+    ? Math.max(0, Math.min(1, (900 - twinScore) / 600))
+    : 0;
+  const twinRisk = twinRiskRaw > 0 ? twinRiskRaw : twinRiskFromScore;
+  const twinRiskBand = String(
+    latestScore?.risk_band || twin?.risk_band || (
+      twinRisk <= 0.30 ? "low_risk" : twinRisk <= 0.60 ? "medium_risk" : "high_risk"
+    ),
+  );
+  const derivedWc = Number(
+    latestScore?.recommended_wc_amount ?? twin?.recommended_wc_amount ?? 0,
+  ) || (
+    twinScore
+      ? Math.max(50_000, Math.min(50_00_000, Math.round(((twinScore - 300) / 600) * 50_00_000)))
+      : null
+  );
 
   const applyScenario = (s: string) => {
     setScenario(s);
@@ -669,7 +698,7 @@ export default function MsmeTwinPage() {
               padding: 0;
               background: #ffffff !important;
               color: #111111 !important;
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+              font-family: "Inter", Arial, sans-serif;
               -webkit-print-color-adjust: exact;
               print-color-adjust: exact;
             }
@@ -744,10 +773,10 @@ export default function MsmeTwinPage() {
             <section>
               <h2>Snapshot</h2>
               <div class="grid">
-                <div class="card"><div class="label">Credit Score</div><div class="value">${escapeHtml(String(score?.credit_score ?? "-"))}</div></div>
-                <div class="card"><div class="label">Risk Band</div><div class="value">${escapeHtml(String(score?.risk_band ?? "-").replace(/_/g, " "))}</div></div>
-                <div class="card"><div class="label">Twin Risk Score</div><div class="value">${escapeHtml(twin ? `${Math.round((twin.risk_score ?? 0) * 100)}%` : "-")}</div></div>
-                <div class="card"><div class="label">Recommended WC</div><div class="value">${escapeHtml(score?.recommended_wc_amount ? fmtINR(score.recommended_wc_amount) : "-")}</div></div>
+                <div class="card"><div class="label">Credit Score</div><div class="value">${escapeHtml(String(twinScore ?? "-"))}</div></div>
+                <div class="card"><div class="label">Risk Band</div><div class="value">${escapeHtml(String(twinRiskBand ?? "-").replace(/_/g, " "))}</div></div>
+                <div class="card"><div class="label">Twin Risk Score</div><div class="value">${escapeHtml(twin ? `${Math.round(twinRisk * 100)}%` : "-")}</div></div>
+                <div class="card"><div class="label">Recommended WC</div><div class="value">${escapeHtml(derivedWc ? fmtINR(derivedWc) : "-")}</div></div>
               </div>
             </section>
 
@@ -871,7 +900,7 @@ export default function MsmeTwinPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
             { label: "Credit Score", value: twinScore || "—", sub: twinRiskBand },
-            { label: "Twin Risk Score", value: twin ? `${Math.round((twin.risk_score ?? 0) * 100)}%` : "—", bad: (twin?.risk_score ?? 0) > 0.5 },
+            { label: "Twin Risk Score", value: twin ? `${Math.round(twinRisk * 100)}%` : "—", bad: twinRisk > 0.5 },
             { label: "Recommended WC", value: derivedWc ? fmtINR(derivedWc) : "—" },
             { label: "Persona", value: twin?.persona ?? "—" },
           ].map((m) => (
@@ -888,12 +917,20 @@ export default function MsmeTwinPage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-4">
+          <TabsTrigger value="overview" className="text-xs gap-1.5"><Shield className="w-3.5 h-3.5" />Overview</TabsTrigger>
           <TabsTrigger value="timeline" className="text-xs gap-1.5"><GitBranch className="w-3.5 h-3.5" />Twin Timeline</TabsTrigger>
           <TabsTrigger value="transactions" className="text-xs gap-1.5"><Activity className="w-3.5 h-3.5" />Transactions</TabsTrigger>
-          <TabsTrigger value="simulation" className="text-xs gap-1.5"><BarChart3 className="w-3.5 h-3.5" />Scenario Sim</TabsTrigger>
-          <TabsTrigger value="reasoning" className="text-xs gap-1.5"><Brain className="w-3.5 h-3.5" />AI Reasoning</TabsTrigger>
-          <TabsTrigger value="export" className="text-xs gap-1.5"><FileText className="w-3.5 h-3.5" />Audit Report</TabsTrigger>
+          <TabsTrigger value="simulation" className="text-xs gap-1.5"><BarChart3 className="w-3.5 h-3.5" />Live Simulation</TabsTrigger>
+          <TabsTrigger value="reasoning" className="text-xs gap-1.5"><Brain className="w-3.5 h-3.5" />Reasoning Trace</TabsTrigger>
+          <TabsTrigger value="export" className="text-xs gap-1.5"><FileText className="w-3.5 h-3.5" />Audit Export</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="overview" className="space-y-4">
+          <ComplianceSnapshotGrid
+            userId={user.id}
+            title="Tier 10 · Explainable Audit Repository"
+          />
+        </TabsContent>
 
         {/* Twin Timeline */}
         <TabsContent value="timeline" className="space-y-4">

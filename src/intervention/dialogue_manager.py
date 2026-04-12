@@ -106,13 +106,19 @@ def _contextualize_message(
 
 # ── rule-based response templates ────────────────────────────────────────────
 
-def _rule_based_response(message: str, twin: DigitalTwin) -> str:
+def _rule_based_response(
+    message: str,
+    twin: DigitalTwin,
+    cibil_override: Optional[int] = None,
+) -> str:
     """
     Deterministic template response for prototype.
     Replace this function body with an LLM API call in production.
     """
     intent = _detect_intent(message)
     cibil = twin.cibil_like_score()
+    if isinstance(cibil_override, int):
+        cibil = max(300, min(900, cibil_override))
 
     if intent == "liquidity":
         if twin.liquidity_health == "LOW":
@@ -209,6 +215,7 @@ class DialogueManager:
         recent_triggers: list[str] | None = None,
         *,
         include_simulation: bool = False,
+        cibil_override: Optional[int] = None,
     ) -> dict[str, Any]:
         """
         Process one user message and return the twin's response.
@@ -226,7 +233,14 @@ class DialogueManager:
         """
         contextual_message = _contextualize_message(message, conversation_history)
         intent = _detect_intent(contextual_message)
-        response_text = _rule_based_response(contextual_message, twin)
+        resolved_cibil = twin.cibil_like_score()
+        if isinstance(cibil_override, int):
+            resolved_cibil = max(300, min(900, cibil_override))
+        response_text = _rule_based_response(
+            contextual_message,
+            twin,
+            cibil_override=resolved_cibil,
+        )
 
         return {
             "role": "twin",
@@ -235,7 +249,7 @@ class DialogueManager:
             "includes_simulation": include_simulation,
             "avatar_expression": twin.avatar_state.expression,
             "mood_message": twin.avatar_state.mood_message,
-            "cibil_score": twin.cibil_like_score(),
+            "cibil_score": resolved_cibil,
             "ts": datetime.utcnow().isoformat(),
         }
 

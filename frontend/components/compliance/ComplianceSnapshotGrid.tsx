@@ -206,10 +206,46 @@ function CreditDecisionLogCard({ userId }: { userId: string }) {
   const [decisions, setDecisions] = useState<any[]>([]);
 
   useEffect(() => {
-    adminApi
-      .getTier10Report(userId)
-      .then((res: any) => setDecisions(Array.isArray(res?.credit_decisions) ? res.credit_decisions : []))
-      .catch(() => setDecisions([]));
+    Promise.all([
+      adminApi.getTier10Report(userId).catch(() => null),
+      twinApi.getAudit(userId).catch(() => []),
+    ]).then(([report, audit]) => {
+      const reportDecisions = Array.isArray((report as any)?.credit_decisions)
+        ? (report as any).credit_decisions
+        : [];
+
+      if (reportDecisions.length > 0) {
+        setDecisions(reportDecisions);
+        return;
+      }
+
+      const records = Array.isArray(audit)
+        ? audit
+        : (Array.isArray((audit as any)?.records)
+          ? (audit as any).records
+          : ((audit as any)?.history ?? []));
+
+      const inferred = records
+        .filter((e: any) => {
+          const action = String(e?.action ?? e?.event_type ?? "").toLowerCase();
+          return (
+            action.includes("loan") ||
+            action.includes("score") ||
+            action.includes("decision") ||
+            action.includes("threshold")
+          );
+        })
+        .map((e: any) => ({
+          task_id: e?.target_id ?? e?.id,
+          status: e?.status ?? e?.action ?? e?.event_type,
+          score_freshness: e?.timestamp ?? e?.ts,
+          credit_score: e?.credit_score,
+          risk_band: e?.risk_band,
+          recommended_credit_limit: e?.recommended_credit_limit,
+        }));
+
+      setDecisions(inferred);
+    });
   }, [userId]);
 
   return (

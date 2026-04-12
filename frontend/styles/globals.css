@@ -55,7 +55,7 @@
   --color-chart-8:   #45B7D1;
 
   /* Typography */
-  --font-display:  var(--font-display), 'SF Pro Display', system-ui, sans-serif;
+  --font-display:  var(--font-display), 'Inter', system-ui, sans-serif;
   --font-body:     var(--font-body), 'Inter', system-ui, sans-serif;
   --font-data:     var(--font-data), 'Fira Code', 'Consolas', monospace;
 

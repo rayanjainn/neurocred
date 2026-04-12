@@ -88,7 +88,9 @@ export default function LoginPage() {
   const handleDemoWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     const el = demoScrollRef.current;
     if (!el || el.scrollHeight <= el.clientHeight) return;
-    e.preventDefault();
+    if (e.cancelable) {
+      e.preventDefault();
+    }
     e.stopPropagation();
     el.scrollTop += e.deltaY;
   };

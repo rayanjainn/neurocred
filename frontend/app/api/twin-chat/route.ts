@@ -1,8 +1,77 @@
 import { NextResponse } from "next/server";
 
+function normalizeBackendBase(raw: string | undefined): string | null {
+  const value = String(raw || "").trim();
+  if (!value || value.startsWith("/")) return null;
+  return value.replace(/\/$/, "");
+}
+
+function resolveBackendCandidates(): string[] {
+  const ordered = [
+    process.env.BACKEND_API_URL,
+    process.env.API_PROXY_TARGET,
+    process.env.NEXT_PUBLIC_API_URL,
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
+    "http://10.10.43.20:8001",
+  ];
+
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const item of ordered) {
+    const normalized = normalizeBackendBase(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    candidates.push(normalized);
+  }
+  return candidates;
+}
+
 function clipText(value: unknown, max = 220): string {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   return text.length > max ? `${text.slice(0, max)}...` : text;
+}
+
+async function fetchBackendPath(path: string): Promise<any | null> {
+  const backends = resolveBackendCandidates();
+  for (const backend of backends) {
+    try {
+      const response = await fetch(`${backend}${path}`, {
+        method: "GET",
+        cache: "no-store",
+      });
+      if (!response.ok) continue;
+      return await response.json().catch(() => null);
+    } catch {
+      // Try next backend candidate.
+    }
+  }
+  return null;
+}
+
+async function buildDynamicContext(userId: string, dataContext: any) {
+  const base = {
+    ...(dataContext && typeof dataContext === "object" ? dataContext : {}),
+    user_id: userId || dataContext?.user_id || dataContext?.userId || "",
+  };
+
+  if (!userId) return base;
+
+  const [twinState, twinHistory, twinTriggers, twinReport] = await Promise.all([
+    fetchBackendPath(`/twin/${encodeURIComponent(userId)}`),
+    fetchBackendPath(`/twin/${encodeURIComponent(userId)}/history`),
+    fetchBackendPath(`/twin/${encodeURIComponent(userId)}/triggers`),
+    fetchBackendPath(`/twin/${encodeURIComponent(userId)}/report`),
+  ]);
+
+  return {
+    ...base,
+    twin_state: twinState ?? base.twin_state ?? {},
+    twin_history: twinHistory ?? base.twin_history ?? [],
+    twin_triggers: twinTriggers ?? base.twin_triggers ?? [],
+    twin_report: twinReport ?? base.twin_report ?? {},
+    context_refreshed_at: new Date().toISOString(),
+  };
 }
 
 function compactContext(raw: any) {
@@ -60,38 +129,67 @@ function compactContext(raw: any) {
   };
 }
 
+function compactConversationHistory(raw: any): Array<{ role: string; text: string }> {
+  if (!Array.isArray(raw)) return [];
+
+  return raw
+    .slice(-10)
+    .map((item: any) => {
+      const role = String(item?.role || "").toLowerCase();
+      const normalizedRole = role === "assistant" ? "assistant" : "user";
+      const text = clipText(item?.text || item?.content || "", 220);
+      return { role: normalizedRole, text };
+    })
+    .filter((item) => item.text.length > 0);
+}
+
 export async function POST(request: Request) {
   try {
-    const { message, dataContext, userId } = await request.json();
-    const apiKey = process.env.FEATHERLESS_API_KEY;
+    const { message, dataContext, userId, conversationHistory, chatSessionId } = await request.json();
+    const apiKey = process.env.GROQ_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "FEATHERLESS_API_KEY is missing. Please add it to frontend env." },
+        { error: "GROQ_API_KEY is missing. Please add it to frontend env." },
         { status: 500 },
       );
     }
 
-    const systemPrompt = [
-      "You are Priya, a Digital Twin Financial AI Assistant for an MSME/individual user.",
-      "You MUST use provided backend twin context as source of truth.",
-      "If data is sparse, say so clearly and provide practical next actions.",
-      "Keep answer short, voice-friendly, and actionable (max 3 short sentences).",
-      "Do not use markdown or bullets.",
-    ].join(" ");
+    const resolvedUserId = String(
+      userId || dataContext?.user_id || dataContext?.userId || "",
+    ).trim();
+
+    const dynamicContext = await buildDynamicContext(resolvedUserId, dataContext);
+    const memory = compactConversationHistory(conversationHistory);
+    const memoryBlock = memory.length
+      ? memory
+          .map((item, idx) => `${idx + 1}. ${item.role}: ${item.text}`)
+          .join("\n")
+      : "none";
+
+    const systemPrompt = `You are Priya, a Digital Twin Financial AI Assistant for an MSME.
+Here is the user's financial data context:
+${JSON.stringify(compactContext(dynamicContext || {}))}
+
+Answer the user's query clearly and concisely (strictly maximum 3 short sentences). Speak directly to the business owner in a conversational and supportive way. Give immediate, actionable insights based on their data if applicable. Do not use formatting like bolding or bullet points, as this text will simply be read aloud by TTS.`;
 
     const safeMessage = clipText(message, 280);
-    const safeContext = compactContext(dataContext || {});
-    const userPrompt = `User ID: ${userId || "unknown"}\nUser query: ${safeMessage}\n\nLive backend twin context (compact):\n${JSON.stringify(safeContext)}`;
+    const safeSessionId = clipText(chatSessionId || "", 80);
+    const userPrompt = [
+      `User ID: ${resolvedUserId || "unknown"}`,
+      `Chat session ID: ${safeSessionId || "none"}`,
+      `Recent chat memory:\n${memoryBlock}`,
+      `User query: ${safeMessage}`,
+    ].join("\n\n");
 
-    const response = await fetch("https://api.featherless.ai/v1/chat/completions", {
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "deepseek-ai/DeepSeek-V3-0324",
+        model: "llama-3.1-8b-instant",
         temperature: 0.7,
         max_tokens: 150,
         messages: [
@@ -103,7 +201,7 @@ export async function POST(request: Request) {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload?.error?.message || "Featherless API error");
+      throw new Error(payload?.error?.message || "Error from Groq API");
     }
 
     const reply = payload?.choices?.[0]?.message?.content?.trim() || "I could not generate a response right now.";
