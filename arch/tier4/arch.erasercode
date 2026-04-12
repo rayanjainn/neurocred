@@ -1,0 +1,33 @@
+title Tier 4 - Stateful Digital Twin Core
+
+direction right
+
+Input [icon: inbox, color: teal] {
+  Feature Vector [icon: file-text, label: "BehaviouralFeatureVector"]
+}
+
+Twin Service [icon: cpu, color: purple] {
+  Metric Deriver [icon: activity, label: "risk/liquidity/stability/dependency"]
+  DNA Builder [icon: hash, label: "32-d deterministic embedding"]
+  Persona Inference [icon: user, label: "genuine/struggling/shell/paper/new"]
+  Avatar Deriver [icon: smile, label: "expression + mood"]
+}
+
+Persistence [icon: database, color: orange] {
+  Twin Store [icon: hard-drive, label: "twin:{user_id}"]
+  History Store [icon: archive, label: "twin:{user_id}:history"]
+  Timeline Stream [icon: layers, label: "stream:twin_timeline"]
+}
+
+Events [icon: radio, color: green] {
+  Twin Updated [icon: bell, label: "pubsub: twin_updated"]
+}
+
+Feature Vector --> Metric Deriver: update_from_features
+Metric Deriver --> DNA Builder: embed signals
+DNA Builder --> Persona Inference: classify persona
+Persona Inference --> Avatar Deriver: set visual state
+Avatar Deriver --> Twin Store: save current
+Twin Store --> History Store: append snapshot when material
+Twin Store --> Timeline Stream: append timeline event
+Twin Store --> Twin Updated: publish state summary

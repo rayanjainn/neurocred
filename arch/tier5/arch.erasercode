@@ -1,0 +1,35 @@
+title Tier 5 - Reasoning and Interrogation Engine
+
+direction right
+
+Inputs [icon: inbox, color: teal] {
+  Features [icon: file-text, label: "Tier 3 behavioural vector"]
+  Twin Context [icon: user, label: "current + previous twin states"]
+}
+
+Reasoning Core [icon: cpu, color: purple] {
+  Contradiction Detector [icon: alert-circle, label: "layer1 z-test\nlayer2 source\nlayer3 LCI"]
+  Context Assembler [icon: layers, label: "priority + token budget"]
+  CoT Engine [icon: message-square, label: "structured JSON reasoning\nLLM with fallback"]
+}
+
+Interrogation [icon: help-circle, color: orange] {
+  Trigger Gate [icon: git-merge, label: "low posterior / contradictions / shifts"]
+  Session Machine [icon: repeat, label: "rank questions\nparse answers\nbuild patches"]
+}
+
+Outputs [icon: send, color: green] {
+  Tier5 Result [icon: file-text, label: "narrative + flags + intents"]
+  Reasoning Stream [icon: layers, label: "stream:reasoning_events"]
+  Session Store [icon: database, label: "tier5:interrogation:{session_id}"]
+}
+
+Features --> Contradiction Detector: derive contradiction signal
+Twin Context --> Context Assembler: delta + recent state
+Contradiction Detector --> Context Assembler: layer outputs
+Context Assembler --> CoT Engine: structured prompt
+CoT Engine --> Trigger Gate: confidence + hypotheses
+Trigger Gate --> Session Machine: create/advance interrogation
+CoT Engine --> Tier5 Result: narrative/intents/flags
+Tier5 Result --> Reasoning Stream: emit reasoning_completed
+Session Machine --> Session Store: persist state machine

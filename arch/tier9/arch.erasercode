@@ -1,0 +1,47 @@
+title Tier 9 - Vigilance, Anomaly, and Deception Detection
+
+direction right
+
+Inputs [icon: inbox, color: teal] {
+  Behavioural Features [icon: file-text, label: "Tier 3 vector"]
+  UPI/EWB Events [icon: database, label: "optional transaction batches"]
+  SMS/Voice Text [icon: message-circle, label: "optional scam text signals"]
+}
+
+Vigilance Modules [icon: cpu, color: purple] {
+  Fraud Ring Detector [icon: share-2, label: "graph SCC + cycles + PageRank"]
+  Scam Detector [icon: alert-triangle, label: "urgency/authority/otp + Bayes"]
+  Bot Detector [icon: bot, label: "precision timing + hub-spoke + mule DNA"]
+  Stress Detector [icon: activity, label: "logistic rolling stress"]
+  Income Underreport [icon: bar-chart, label: "cohort-normalized sigmoid score"]
+  Identity Shift [icon: shuffle, label: "JS divergence + behavior change"]
+}
+
+Aggregation [icon: git-merge, color: orange] {
+  Risk Aggregator [icon: layers, label: "overall risk level"]
+  Deception Score [icon: target, label: "weighted composite 0..1"]
+}
+
+Outputs [icon: send, color: green] {
+  Tier9 Cache [icon: database, label: "tier9:result:{user_id}"]
+  Vigilance Stream [icon: layers, label: "stream:vigilance_events"]
+  Summary Flags [icon: flag, label: "fraud/scam/bot/stress/shift"]
+}
+
+Behavioural Features --> Fraud Ring Detector: contextual inputs
+UPI/EWB Events --> Fraud Ring Detector: graph edges
+SMS/Voice Text --> Scam Detector: text evidence
+UPI/EWB Events --> Bot Detector: network and timing evidence
+Behavioural Features --> Stress Detector: rolling indicators
+Behavioural Features --> Income Underreport: observed vs declared
+Behavioural Features --> Identity Shift: drift signals
+Fraud Ring Detector --> Risk Aggregator: module risk
+Scam Detector --> Risk Aggregator: module risk
+Bot Detector --> Risk Aggregator: module risk
+Stress Detector --> Risk Aggregator: module risk
+Income Underreport --> Risk Aggregator: module risk
+Identity Shift --> Risk Aggregator: module risk
+Risk Aggregator --> Deception Score: compute composite
+Deception Score --> Tier9 Cache: persist full result
+Deception Score --> Vigilance Stream: emit events
+Risk Aggregator --> Summary Flags: publish lightweight outputs

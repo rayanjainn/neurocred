@@ -1,0 +1,49 @@
+title Tier 6 - Predictive Simulation and Stress Engine
+
+direction right
+
+Inputs [icon: inbox, color: teal] {
+  Twin Snapshot [icon: user, label: "income/expense/cash/risk/persona"]
+  Scenario Spec [icon: list, label: "baseline/atomic/compound/cascading"]
+}
+
+Simulation Core [icon: cpu, color: purple] {
+  Scenario Resolver [icon: settings, label: "day-level multipliers"]
+  Regime Engine [icon: shuffle, label: "state transitions"]
+  GARCH Volatility [icon: activity, label: "sigma path per day"]
+  Correlation Engine [icon: git-merge, label: "sobol + antithetic + copula"]
+  Cash Path Runner [icon: play, label: "N paths x H days"]
+}
+
+Risk Analytics [icon: bar-chart-2, color: orange] {
+  Cascade Tracker [icon: repeat, label: "EMI stress propagation"]
+  Tail Risk [icon: alert-triangle, label: "VaR/CVaR/default prob"]
+  EWS [icon: bell, label: "7d/14d/30d early warning"]
+  Fan Chart [icon: area-chart, label: "p10/p25/p50/p75/p90"]
+  Recovery Planner [icon: compass, label: "action search"]
+}
+
+Outputs [icon: send, color: green] {
+  Sim Cache [icon: database, label: "sim:{user}:{sim_id}"]
+  EWS Cache [icon: database, label: "sim:ews:{user}"]
+  Fan Cache [icon: database, label: "sim:fan:{user}"]
+  Twin Projection [icon: user-check, label: "predicted_risk_trajectory\nlast_simulation_id"]
+  Event [icon: radio, label: "simulation_completed"]
+}
+
+Twin Snapshot --> Scenario Resolver: build run spec
+Scenario Spec --> Scenario Resolver: resolve components
+Scenario Resolver --> Regime Engine: path controls
+Regime Engine --> GARCH Volatility: sigma multipliers
+GARCH Volatility --> Correlation Engine: scale shocks
+Correlation Engine --> Cash Path Runner: evolve paths
+Cash Path Runner --> Cascade Tracker: due-day stress updates
+Cascade Tracker --> Tail Risk: aggregate losses
+Tail Risk --> EWS: warning probabilities
+Tail Risk --> Fan Chart: quantile trajectories
+EWS --> Recovery Planner: suggest interventions
+Tail Risk --> Sim Cache: persist full result
+EWS --> EWS Cache: persist snapshot
+Fan Chart --> Fan Cache: persist chart payload
+Sim Cache --> Twin Projection: patch twin fields
+Twin Projection --> Event: publish completion
