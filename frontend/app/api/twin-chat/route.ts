@@ -63,11 +63,11 @@ function compactContext(raw: any) {
 export async function POST(request: Request) {
   try {
     const { message, dataContext, userId } = await request.json();
-    const apiKey = process.env.GROQ_API_KEY;
+    const apiKey = process.env.FEATHERLESS_API_KEY;
 
     if (!apiKey) {
       return NextResponse.json(
-        { error: "GROQ_API_KEY is missing. Please add it to frontend env." },
+        { error: "FEATHERLESS_API_KEY is missing. Please add it to frontend env." },
         { status: 500 },
       );
     }
@@ -84,16 +84,16 @@ export async function POST(request: Request) {
     const safeContext = compactContext(dataContext || {});
     const userPrompt = `User ID: ${userId || "unknown"}\nUser query: ${safeMessage}\n\nLive backend twin context (compact):\n${JSON.stringify(safeContext)}`;
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const response = await fetch("https://api.featherless.ai/v1/chat/completions", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.GROQ_CALL_MODEL || "llama-3.1-8b-instant",
-        temperature: 0.4,
-        max_tokens: 120,
+        model: "deepseek-ai/DeepSeek-V3-0324",
+        temperature: 0.7,
+        max_tokens: 150,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -103,7 +103,7 @@ export async function POST(request: Request) {
 
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload?.error?.message || "Groq API error");
+      throw new Error(payload?.error?.message || "Featherless API error");
     }
 
     const reply = payload?.choices?.[0]?.message?.content?.trim() || "I could not generate a response right now.";
