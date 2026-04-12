@@ -54,11 +54,20 @@ const RISK_STYLES = {
   const handleStartCall = async () => {
     const callNumber = window.prompt("Enter number in E.164 format (example: +919876543210)", "+91");
     if (!callNumber?.trim()) return;
+    const normalized = callNumber.trim();
+    if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
+      toast({
+        title: "Invalid phone number",
+        description: "Use E.164 format, for example +919876543210.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setIsCalling(true);
     try {
       const payload: any = await voiceApi.startCall({
-        to: callNumber.trim(),
+        to: normalized,
         userId: score?.user_id || "",
       });
 
