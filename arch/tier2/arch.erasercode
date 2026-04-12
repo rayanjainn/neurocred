@@ -1,0 +1,31 @@
+title Tier 2 - Semantic Classification and Stream Enrichment
+
+direction right
+
+Input [icon: inbox, color: teal] {
+  Raw Stream [icon: layers, label: "stream:raw_ingestion"]
+}
+
+Classifier [icon: cpu, color: purple] {
+  Rule Prefilter [icon: filter, label: "regex high-confidence mapping"]
+  MiniLM Encoder [icon: zap, label: "all-MiniLM-L6-v2\nanchor similarity"]
+  Category Mapper [icon: tag, label: "merchant_category -> transaction_type"]
+}
+
+Enrichment [icon: activity, color: orange] {
+  Anomaly Detector [icon: alert-triangle, label: "failed tx + z-score + velocity"]
+  Window Buffer [icon: clock, label: "7d/30d/90d per-user deques"]
+}
+
+Outputs [icon: send, color: green] {
+  Typed Stream [icon: layers, label: "stream:typed_events"]
+  Window Cache [icon: database, label: "twin:windows:{user_id}"]
+}
+
+Raw Stream --> Rule Prefilter: consume via group
+Rule Prefilter --> MiniLM Encoder: fallback path
+MiniLM Encoder --> Category Mapper: best category + confidence
+Category Mapper --> Anomaly Detector: enrich event
+Anomaly Detector --> Window Buffer: update windows
+Anomaly Detector --> Typed Stream: publish enriched event
+Window Buffer --> Window Cache: store summaries

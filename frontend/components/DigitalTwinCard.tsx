@@ -9,7 +9,7 @@ import { VoiceModal } from "@/components/voice/VoiceModal";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/dib/authContext";
 
-import { voiceApi } from "@/dib/api";
+import { twinApi, voiceApi } from "@/dib/api";
 
 const VOICE_PENDING_ACTION_KEY = "voice.pendingAction";
 
@@ -17,15 +17,85 @@ interface DigitalTwinCardProps {
   score?: any;
 }
 
+const DEFAULT_ASSISTANT_CALL_NUMBER =
+  (process.env.NEXT_PUBLIC_CALL_ASSISTANT_TO || "+***REMOVED***").trim();
+
 export function DigitalTwinCard({ score }: DigitalTwinCardProps) {
   const { user } = useAuth();
+  const [liveTwin, setLiveTwin] = useState<any | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const fetchTwinSnapshot = async () => {
+      const rawCandidates = [
+        user?.id,
+        score?.user_id,
+        score?.userId,
+        user?.gstin,
+        score?.gstin,
+      ];
+
+      const seen = new Set<string>();
+      for (const raw of rawCandidates) {
+        const candidate = String(raw || "").trim();
+        if (!candidate || seen.has(candidate)) continue;
+        seen.add(candidate);
+        try {
+          const snapshot: any = await twinApi.get(candidate);
+          if (snapshot && typeof snapshot === "object") {
+            if (!cancelled) setLiveTwin(snapshot);
+            return;
+          }
+        } catch {
+          // Try next identifier candidate.
+        }
+      }
+
+      if (!cancelled) setLiveTwin(null);
+    };
+
+    fetchTwinSnapshot();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, user?.gstin, score?.user_id, score?.userId, score?.gstin]);
+
+  const liquidityFromTwin = String(liveTwin?.liquidity_health || "").trim().toUpperCase();
+  const dynamicLiquidity =
+    liquidityFromTwin === "HIGH" || liquidityFromTwin === "MEDIUM" || liquidityFromTwin === "LOW"
+      ? liquidityFromTwin
+      : (score?.liquidity_status || "MEDIUM");
+
+  const stabilityFromTwin =
+    typeof liveTwin?.income_stability === "number"
+      ? Math.round(Math.max(0, Math.min(1, Number(liveTwin.income_stability))) * 100)
+      : null;
+
+  const updatedAtSource =
+    liveTwin?.last_updated ||
+    liveTwin?.updated_at ||
+    score?.score_freshness ||
+    score?.computed_at;
+  const updatedAt = (() => {
+    if (!updatedAtSource) return "Just now";
+    const parsed = new Date(String(updatedAtSource));
+    if (Number.isNaN(parsed.getTime())) return "Just now";
+    return parsed.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  })();
+
   const twin = {
     name: user?.name?.split(" ")[0] || "User",
     riskLevel: (score?.risk_band?.toLowerCase() as "low" | "medium" | "high") || "medium",
-    liquidity: score?.liquidity_status || "MEDIUM",
-    stability: score?.data_maturity_months ? Math.min(100, score.data_maturity_months * 8) : 82,
+    liquidity: dynamicLiquidity,
+    stability: stabilityFromTwin ?? (score?.data_maturity_months ? Math.min(100, score.data_maturity_months * 8) : 82),
     suggestion: score?.top_reasons?.[0] || "You're doing great! Maintain current spending habits.",
-    lastUpdated: "Just now",
+    lastUpdated: updatedAt,
   };
 
 const RISK_STYLES = {
@@ -52,14 +122,35 @@ const RISK_STYLES = {
   const [profileImageSeed, setProfileImageSeed] = useState<string | null>(null);
   const { toast } = useToast();
 
+  const resolveVoiceUserId = (): string => {
+    const candidates = [
+      score?.user_id,
+      score?.userId,
+      score?.gstin,
+      user?.gstin,
+      user?.id,
+    ];
+    for (const candidate of candidates) {
+      const value = String(candidate || "").trim();
+      if (value) return value;
+    }
+    return "";
+  };
+
   const handleStartCall = async () => {
-    const callNumber = window.prompt("Enter number in E.164 format (example: +919876543210)", "+91");
-    if (!callNumber?.trim()) return;
-    const normalized = callNumber.trim();
+    const compact = DEFAULT_ASSISTANT_CALL_NUMBER.replace(/[\s()-]/g, "");
+    const digitsOnly = compact.replace(/^\+/, "");
+    let normalized = compact;
+    if (!compact.startsWith("+") && /^\d{10}$/.test(digitsOnly)) {
+      normalized = `+91${digitsOnly}`;
+    } else if (!compact.startsWith("+") && /^91\d{10}$/.test(digitsOnly)) {
+      normalized = `+${digitsOnly}`;
+    }
+
     if (!/^\+[1-9]\d{7,14}$/.test(normalized)) {
       toast({
         title: "Invalid phone number",
-        description: "Use E.164 format, for example +919876543210.",
+        description: "Set NEXT_PUBLIC_CALL_ASSISTANT_TO to a valid E.164 number, for example +***REMOVED***.",
         variant: "destructive",
       });
       return;
@@ -67,9 +158,12 @@ const RISK_STYLES = {
 
     setIsCalling(true);
     try {
+      const userId = resolveVoiceUserId();
+      const callerName = String(user?.name || twin.name || "").trim();
       const payload: any = await voiceApi.startCall({
         to: normalized,
-        userId: score?.user_id || "",
+        userId,
+        userName: callerName,
       });
 
       toast({

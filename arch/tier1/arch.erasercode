@@ -1,0 +1,31 @@
+title Tier 1 - Signal Ingestion and Canonicalization
+
+direction right
+
+Sources [icon: database, color: teal] {
+  Persona Generator [icon: activity, label: "generator.py\nprofiles + timelines"]
+  Raw Event Fabricator [icon: package, label: "bank/upi/sms/emi/ob\ngst/ewb style events"]
+}
+
+Schema Layer [icon: check-square, color: orange] {
+  Canonical Models [icon: file-text, label: "schemas.py\nCanonicalEvent + source models"]
+  Provenance Mapper [icon: tag, label: "source_provenance\nstatus/channel normalization"]
+}
+
+Transport Layer [icon: layers, color: purple] {
+  Redis Producer [icon: send, label: "redis_producer.py\nXADD batched publish"]
+  Unified Stream [icon: inbox, label: "stream:raw_ingestion"]
+  Source Streams [icon: git-branch, label: "stream:bank, upi, sms, emi, ob, voice"]
+}
+
+Offline Store [icon: archive, color: gray] {
+  Raw Parquets [icon: database, label: "data/raw/*.parquet"]
+}
+
+Persona Generator --> Raw Event Fabricator: synthesize events
+Raw Event Fabricator --> Canonical Models: map to canonical shape
+Canonical Models --> Provenance Mapper: enforce contract
+Provenance Mapper --> Redis Producer: serialized fields
+Redis Producer --> Unified Stream: publish for Tier 2
+Redis Producer --> Source Streams: publish by provenance
+Raw Event Fabricator --> Raw Parquets: write chunked snapshots

@@ -5,6 +5,7 @@ import { useAuth } from "@/dib/authContext";
 import { twinApi, simulationApi, reasoningApi, ingestApi, interventionApi, individualApi } from "@/dib/api";
 import { PageHeader } from "@/components/shared";
 import { TimeSeriesPanel } from "@/components/TimeSeriesPanel";
+import { ComplianceSnapshotGrid } from "@/components/compliance/ComplianceSnapshotGrid";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -151,7 +152,7 @@ export default function IndividualTwinPage() {
   const [triggers, setTriggers] = useState<any[]>([]);
   const [cot, setCot] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState("timeline");
+  const [tab, setTab] = useState("overview");
 
   // What-If state
   const [incomeChg, setIncomeChg] = useState([0]);
@@ -952,12 +953,20 @@ export default function IndividualTwinPage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="mb-4">
+          <TabsTrigger value="overview" className="text-xs gap-1.5"><Shield className="w-3.5 h-3.5" />Overview</TabsTrigger>
           <TabsTrigger value="timeline" className="text-xs gap-1.5"><GitBranch className="w-3.5 h-3.5" />Timeline</TabsTrigger>
           <TabsTrigger value="transactions" className="text-xs gap-1.5"><Activity className="w-3.5 h-3.5" />Transactions</TabsTrigger>
-          <TabsTrigger value="simulation" className="text-xs gap-1.5"><Activity className="w-3.5 h-3.5" />What-If</TabsTrigger>
-          <TabsTrigger value="reasoning" className="text-xs gap-1.5"><Brain className="w-3.5 h-3.5" />AI Reasoning</TabsTrigger>
-          <TabsTrigger value="export" className="text-xs gap-1.5"><Download className="w-3.5 h-3.5" />My Data Export</TabsTrigger>
+          <TabsTrigger value="simulation" className="text-xs gap-1.5"><Activity className="w-3.5 h-3.5" />Live Simulation</TabsTrigger>
+          <TabsTrigger value="reasoning" className="text-xs gap-1.5"><Brain className="w-3.5 h-3.5" />Reasoning Trace</TabsTrigger>
+          <TabsTrigger value="export" className="text-xs gap-1.5"><Download className="w-3.5 h-3.5" />Audit Export</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="overview" className="space-y-4">
+          <ComplianceSnapshotGrid
+            userId={user.id}
+            title="Tier 10 · Explainable Audit Repository"
+          />
+        </TabsContent>
 
         {/* Timeline */}
         <TabsContent value="timeline" className="space-y-4">

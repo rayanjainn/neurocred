@@ -22,8 +22,11 @@ import {
   CheckCircle2,
   ArrowRight,
   Briefcase,
+  CalendarClock,
+  FileCheck2,
   FileText,
   Flag,
+  Network,
   RefreshCw,
   TrendingUp,
   Shield,
@@ -181,42 +184,123 @@ export default function MsmeDashboard() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-4">
-        <div className="xl:col-span-5 gsap-card opacity-0">
-          <DigitalTwinCard score={score} />
+        <div className="xl:col-span-5 flex flex-col gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="gsap-card opacity-0">
+              <StatCard
+                label="Category"
+                value={
+                  score.msme_category
+                    ? score.msme_category.charAt(0).toUpperCase() + score.msme_category.slice(1)
+                    : "Individual"
+                }
+                icon={TrendingUp}
+              />
+            </div>
+            <div className="gsap-card opacity-0">
+              <StatCard
+                label="Data Maturity"
+                value={`${score.data_maturity_months}mo`}
+                icon={FileText}
+              />
+            </div>
+            <div className="gsap-card opacity-0">
+              <StatCard
+                label="Pending Loans"
+                value={pendingLoans.length}
+                icon={Briefcase}
+              />
+            </div>
+          </div>
+
+          <div className="gsap-card opacity-0">
+            <DigitalTwinCard score={score} />
+          </div>
+
+          <Card className="border-border shadow-sm gsap-card opacity-0">
+            <CardHeader className="py-3 px-4 border-b">
+              <CardTitle className="text-sm font-semibold">
+                Scheme Eligibility
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-4 flex gap-4">
+              <div
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg ${score.cgtmse_eligible ? "bg-emerald-50 text-emerald-700" : "bg-muted text-muted-foreground"}`}
+              >
+                {score.cgtmse_eligible ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <Shield className="w-4 h-4" />
+                )}
+                <span className="text-sm font-medium">CGTMSE</span>
+              </div>
+              <div
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg ${score.mudra_eligible ? "bg-emerald-50 text-emerald-700" : "bg-muted text-muted-foreground"}`}
+              >
+                {score.mudra_eligible ? (
+                  <CheckCircle2 className="w-4 h-4" />
+                ) : (
+                  <Shield className="w-4 h-4" />
+                )}
+                <span className="text-sm font-medium">MUDRA</span>
+              </div>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="xl:col-span-4 flex flex-col gap-4">
-          <Card className="border-border shadow-sm gsap-card opacity-0 h-full">
+          <div className="gsap-card opacity-0 min-h-[380px] xl:h-[380px]">
+            <VigilanceReasoningCard userId={user.gstin ?? user.id} />
+          </div>
+
+          <Card className="border-border shadow-sm gsap-card opacity-0">
             <CardHeader className="py-3 px-4 border-b">
               <CardTitle className="text-sm font-semibold">
                 Top Score Drivers
               </CardTitle>
             </CardHeader>
             <CardContent className="p-4">
-              <ul className="space-y-2">
+              <ul className="space-y-3">
                 {(score.top_reasons || [])
                   .filter((r: string) => !r.startsWith("Path to Prime"))
-                  .map((reason: string, i: number) => (
+                  .slice(0, 3)
+                  .map((reason: string, i: number) => {
+                    const icon =
+                      i === 0 ? CalendarClock : i === 1 ? FileCheck2 : Network;
+                    const impactLabel = i < 2 ? "HIGH IMPACT" : "MEDIUM IMPACT";
+                    const impactValue = i < 2 ? 88 : 64;
+                    const Icon = icon;
+                    return (
                     <li
                       key={i}
-                      className="flex items-start gap-2 text-sm text-foreground"
+                      className="rounded-2xl border border-white/10 bg-white/[0.02] p-3"
                     >
-                      <span className="w-5 h-5 rounded-full bg-accent text-primary text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
-                        {i + 1}
-                      </span>
-                      {reason}
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
+                          <Icon className="h-5 w-5" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium text-foreground leading-snug">{reason}</p>
+                        </div>
+                        <div className="w-32 shrink-0">
+                          <p className="text-[10px] font-semibold tracking-wide text-lime-400 text-right">{impactLabel}</p>
+                          <div className="mt-1 h-2 w-full rounded-full bg-white/10 overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-lime-400 to-lime-300"
+                              style={{ width: `${impactValue}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
                     </li>
-                  ))}
+                    );
+                  })}
               </ul>
             </CardContent>
           </Card>
-
-          <div className="gsap-card opacity-0 h-full">
-            <VigilanceReasoningCard userId={user.gstin ?? user.id} />
-          </div>
         </div>
 
-        <div className="xl:col-span-3 xl:row-span-3 flex flex-col gap-4">
+        <div className="xl:col-span-3 flex flex-col gap-4">
           <Card className="border-border shadow-sm gsap-card opacity-0">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
@@ -245,11 +329,11 @@ export default function MsmeDashboard() {
             </CardContent>
           </Card>
 
-          <Card className="border-border shadow-sm gsap-card opacity-0">
+          <Card className="border-border shadow-sm gsap-card opacity-0 min-h-[380px] xl:h-[380px] flex flex-col py-0">
             <CardHeader className="py-3 px-4 border-b">
               <CardTitle className="text-sm font-semibold">Quick Actions</CardTitle>
             </CardHeader>
-            <CardContent className="p-4 flex flex-col gap-3">
+            <CardContent className="p-3 flex flex-col gap-2.5 flex-1">
               {[
                 {
                   label: "Request a Loan",
@@ -274,18 +358,18 @@ export default function MsmeDashboard() {
                   key={action.href}
                   onClick={() => router.push(action.href)}
                   className={cn(
-                    "flex flex-col justify-center p-4 rounded-xl transition-all text-left border",
+                    "flex flex-col justify-center p-3 rounded-lg transition-all text-left border",
                     action.primary
                       ? "bg-primary text-primary-foreground border-primary hover:bg-primary/90"
                       : "glass border-border hover:border-primary/50"
                   )}
                 >
-                  <div className="flex items-center justify-between w-full mb-1">
-                    <span className="font-semibold text-sm tracking-tight">{action.label}</span>
-                    <ArrowRight className="w-4 h-4 shrink-0 opacity-70" />
+                  <div className="flex items-center justify-between w-full mb-0.5">
+                    <span className="font-semibold text-[15px] tracking-tight leading-tight">{action.label}</span>
+                    <ArrowRight className="w-[18px] h-[18px] shrink-0 opacity-70" />
                   </div>
                   <p
-                    className={cn("text-xs leading-relaxed", action.primary ? "text-primary-foreground/80" : "text-muted-foreground")}
+                    className={cn("text-[13px] leading-snug", action.primary ? "text-primary-foreground/80" : "text-muted-foreground")}
                   >
                     {action.desc}
                   </p>
@@ -295,66 +379,8 @@ export default function MsmeDashboard() {
           </Card>
         </div>
 
-        <div className="xl:col-span-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="gsap-card opacity-0">
-            <StatCard
-              label="Category"
-              value={
-                score.msme_category
-                  ? score.msme_category.charAt(0).toUpperCase() + score.msme_category.slice(1)
-                  : "Individual"
-              }
-              icon={TrendingUp}
-            />
-          </div>
-          <div className="gsap-card opacity-0">
-            <StatCard
-              label="Data Maturity"
-              value={`${score.data_maturity_months}mo`}
-              icon={FileText}
-            />
-          </div>
-          <div className="gsap-card opacity-0">
-            <StatCard
-              label="Pending Loans"
-              value={pendingLoans.length}
-              icon={Briefcase}
-            />
-          </div>
-        </div>
-
-        <Card className="xl:col-span-4 border-border shadow-sm gsap-card opacity-0">
-          <CardHeader className="py-3 px-4 border-b">
-            <CardTitle className="text-sm font-semibold">
-              Scheme Eligibility
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-4 flex gap-4">
-            <div
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg ${score.cgtmse_eligible ? "bg-emerald-50 text-emerald-700" : "bg-muted text-muted-foreground"}`}
-            >
-              {score.cgtmse_eligible ? (
-                <CheckCircle2 className="w-4 h-4" />
-              ) : (
-                <Shield className="w-4 h-4" />
-              )}
-              <span className="text-sm font-medium">CGTMSE</span>
-            </div>
-            <div
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg ${score.mudra_eligible ? "bg-emerald-50 text-emerald-700" : "bg-muted text-muted-foreground"}`}
-            >
-              {score.mudra_eligible ? (
-                <CheckCircle2 className="w-4 h-4" />
-              ) : (
-                <Shield className="w-4 h-4" />
-              )}
-              <span className="text-sm font-medium">MUDRA</span>
-            </div>
-          </CardContent>
-        </Card>
-
         {(score.top_reasons || []).some((r: string) => r.startsWith("Path to Prime")) && (
-          <Card className="xl:col-span-9 border-[rgba(200,255,0,0.15)] shadow-sm gsap-card opacity-0 bg-[rgba(200,255,0,0.04)]">
+          <Card className="xl:col-span-12 border-[rgba(200,255,0,0.15)] shadow-sm gsap-card opacity-0 bg-[rgba(200,255,0,0.04)]">
             <CardHeader className="py-3 px-4 border-b border-[rgba(200,255,0,0.1)]">
               <CardTitle className="text-sm font-semibold text-[#C8FF00] flex items-center gap-2">
                 <TrendingUp className="w-4 h-4" />
@@ -373,7 +399,7 @@ export default function MsmeDashboard() {
         )}
 
         {/* Tier 6 Risk Simulation Panel */}
-        <div className="xl:col-span-9 gsap-card opacity-0">
+        <div className="xl:col-span-12 gsap-card opacity-0">
           <SimulationPanel userId={user.gstin ?? user.id} score={score} />
         </div>
       </div>

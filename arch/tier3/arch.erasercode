@@ -1,0 +1,35 @@
+title Tier 3 - Behavioural Feature and Trend Engine
+
+direction right
+
+Input [icon: inbox, color: teal] {
+  Typed Stream [icon: layers, label: "stream:typed_events"]
+}
+
+Feature Core [icon: cpu, color: purple] {
+  Event Store [icon: clock, label: "per-user bounded history"]
+  Rolling Metrics [icon: activity, label: "cashflow, liquidity, burden\nstability, volatility"]
+  Pattern Signals [icon: repeat, label: "salary spike, inflation trend\ncategory shift"]
+}
+
+Stat Layer [icon: bar-chart-2, color: orange] {
+  KNN Imputer [icon: toolbox, label: "sparse field repair"]
+  Isolation Forest [icon: alert-triangle, label: "temporal anomalies"]
+  Cohort Benchmark [icon: users, label: "peer z-score deviation"]
+}
+
+Output [icon: send, color: green] {
+  Feature Stream [icon: layers, label: "stream:behavioural_features"]
+  Feature Cache [icon: database, label: "twin:features:{user_id}"]
+  Feature Parquet [icon: archive, label: "data/features/user_id=*\nfeatures.parquet"]
+}
+
+Typed Stream --> Event Store: consume + parse
+Event Store --> Rolling Metrics: compute windows
+Rolling Metrics --> Pattern Signals: derive behavior deltas
+Pattern Signals --> KNN Imputer: offline correction
+KNN Imputer --> Isolation Forest: anomaly flagging
+Isolation Forest --> Cohort Benchmark: deviation scoring
+Cohort Benchmark --> Feature Stream: publish vector
+Cohort Benchmark --> Feature Cache: store latest
+Cohort Benchmark --> Feature Parquet: persist partition

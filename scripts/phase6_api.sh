@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+# Export variables from .env for API/worker runtime (Twilio, Groq, Redis, etc.).
+if [ -f .env ]; then
+	set -a
+	. ./.env
+	set +a
+fi
+
 uvicorn src.api.main:app --host 0.0.0.0 --port 8001 --reload &
 API_PID=$!
 

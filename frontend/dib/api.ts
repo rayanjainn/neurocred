@@ -1065,6 +1065,10 @@ export const twinApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  getChatSession: (userId: string, chatSessionId: string, limit: number = 30) =>
+    apiFetch<Record<string, unknown>>(
+      `/twin/${encodeURIComponent(userId)}/chat/session/${encodeURIComponent(chatSessionId)}?limit=${Math.max(1, Math.min(limit, 200))}`,
+    ),
   streamChat: (
     userId: string,
     body: Record<string, unknown>,
@@ -1113,11 +1117,29 @@ export const voiceApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  startCall: (body: Record<string, unknown>) =>
-    apiFetch<Record<string, unknown>>("/voice/call/start", {
+  startCall: async (body: Record<string, unknown>) => {
+    const token = getToken();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch("/api/voice-agent/call/start", {
       method: "POST",
+      cache: "no-store",
+      headers,
       body: JSON.stringify(body),
-    }),
+    });
+
+    const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!res.ok) {
+      const detail =
+        String(payload?.detail || payload?.error || "").trim() || "Request failed";
+      throw new Error(detail);
+    }
+
+    return payload;
+  },
   respond: (body: Record<string, unknown>) =>
     apiFetch<Record<string, unknown>>("/voice/call/respond", {
       method: "POST",

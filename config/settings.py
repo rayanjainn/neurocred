@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     llm_model: str = "google/gemma-3-4b-it:free"
 
+    # Voice assistant / Twilio
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
+    voice_public_base_url: str = ""
+    public_voice_url: str = ""
+    domain: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 

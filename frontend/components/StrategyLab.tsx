@@ -417,7 +417,9 @@ function CanvasStrategyLab({ user }: { user: any }) {
     const el = event.currentTarget;
     if (el.scrollHeight > el.clientHeight) {
       el.scrollTop += event.deltaY;
-      event.preventDefault();
+      if (event.cancelable) {
+        event.preventDefault();
+      }
     }
   };
   

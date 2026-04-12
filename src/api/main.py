@@ -47,7 +47,7 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode
 from xml.sax.saxutils import escape
 
 import httpx
@@ -95,9 +95,20 @@ app.include_router(strategy_router)
 app.include_router(portal_router)
 
 CALL_SYSTEM_PROMPT = (
-    "You are Vyapar Saathi, a smart business assistant for small vendors. "
-    "Keep answers short, conversational, practical, and voice-friendly."
+    "You are NeuroCred, a smart business assistant for small vendors. "
+    "Keep answers short, conversational, practical, and voice-friendly in clear Indian English."
 )
+
+_VOICE_TRIGGER_LABELS: dict[str, str] = {
+    "liquidity_drop": "cash buffer is running low",
+    "prequalified_micro_loan_offer": "a pre-qualified liquidity support offer is available",
+    "overspend_warning": "spending volatility is elevated",
+    "emi_at_risk": "EMI burden is high",
+    "lifestyle_inflation": "spending growth is outpacing baseline",
+    "savings_opportunity": "you have a savings optimization opportunity",
+    "fraud_anomaly": "an anomaly risk alert is active",
+    "new_to_credit_guidance": "new-to-credit guidance is recommended",
+}
 
 
 def _normalize_public_base(raw: str | None) -> str | None:
@@ -114,6 +125,9 @@ def _resolve_webhook_base_url(request: Request) -> str | None:
         os.getenv("VOICE_PUBLIC_BASE_URL")
         or os.getenv("PUBLIC_VOICE_URL")
         or os.getenv("DOMAIN")
+        or settings.voice_public_base_url
+        or settings.public_voice_url
+        or settings.domain
     )
     if configured:
         return configured
@@ -129,13 +143,704 @@ async def _is_reachable(base_url: str) -> bool:
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(f"{base_url}/health")
-        return response.status_code < 500
+        # Require successful health, not just "non-5xx", to avoid offline tunnel false positives.
+        return response.status_code == 200
     except Exception:
         return False
 
 
 def _safe_speech(text: str) -> str:
     return escape(" ".join(text.replace("\n", " ").split())[:900])
+
+
+def _voice_display_name(raw_name: str | None) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 ]+", " ", (raw_name or "")).strip()
+    if not cleaned:
+        return "friend"
+    return cleaned.split()[0][:32]
+
+
+def _normalize_phone_digits(raw: str | None) -> str:
+    digits = re.sub(r"\D+", "", (raw or ""))
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if len(digits) >= 10:
+        return digits[-10:]
+    return digits
+
+
+def _lookup_user_name_from_store(user_id: str) -> str | None:
+    if not user_id:
+        return None
+    try:
+        from src.api.portal_routes import _STORE  # type: ignore
+
+        users = _STORE.get("users", []) if isinstance(_STORE, dict) else []
+        for row in users:
+            rid = str(row.get("id", "")).strip()
+            rgstin = str(row.get("gstin", "")).strip()
+            if user_id in {rid, rgstin}:
+                name = str(row.get("name", "")).strip()
+                return name or None
+    except Exception:
+        return None
+    return None
+
+
+async def _has_voice_profile_data(redis: aioredis.Redis, user_id: str) -> bool:
+    if not user_id:
+        return False
+
+    twin_key = f"twin:{user_id}"
+    feat_key = f"twin:features:{user_id}"
+
+    try:
+        if await redis.get(twin_key):
+            return True
+    except Exception as exc:
+        if "WRONGTYPE" in str(exc):
+            try:
+                if await redis.hgetall(twin_key):
+                    return True
+            except Exception:
+                pass
+
+    try:
+        if await redis.get(feat_key):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+async def _resolve_user_id_from_phone(redis: aioredis.Redis, to_number: str) -> str:
+    normalized_target = _normalize_phone_digits(to_number)
+    if not normalized_target:
+        return ""
+
+    # Optional explicit map in Redis for quick overrides.
+    try:
+        mapped = str(await redis.get(f"voice:phone:{normalized_target}") or "").strip()
+        if mapped:
+            return mapped
+    except Exception:
+        pass
+
+    # In-memory portal users (if phone/mobile fields are present).
+    phone_fields = (
+        "phone",
+        "mobile",
+        "mobile_no",
+        "phone_number",
+        "mobile_number",
+        "contact_number",
+        "whatsapp_number",
+        "msisdn",
+    )
+    try:
+        from src.api.portal_routes import _STORE  # type: ignore
+
+        users = _STORE.get("users", []) if isinstance(_STORE, dict) else []
+        for row in users:
+            user_id = str(row.get("id", "")).strip()
+            if not user_id:
+                continue
+            for key in phone_fields:
+                value = _normalize_phone_digits(str(row.get(key, "")))
+                if value and value == normalized_target:
+                    return user_id
+    except Exception:
+        pass
+
+    # Disk profile lookup (generated dataset).
+    try:
+        from pathlib import Path
+
+        import polars as pl
+
+        profile_path = Path("data/raw/user_profiles.parquet")
+        if profile_path.exists():
+            df = pl.read_parquet(profile_path)
+            usable_cols = [c for c in phone_fields if c in df.columns]
+            if "user_id" in df.columns and usable_cols:
+                for row in df.select(["user_id", *usable_cols]).to_dicts():
+                    uid = str(row.get("user_id", "")).strip()
+                    if not uid:
+                        continue
+                    for col in usable_cols:
+                        value = _normalize_phone_digits(str(row.get(col, "")))
+                        if value and value == normalized_target:
+                            return uid
+    except Exception:
+        pass
+
+    return ""
+
+
+async def _resolve_voice_user_id(
+    redis: aioredis.Redis,
+    requested_user_id: str,
+    user_name: str,
+    to_number: str,
+) -> str:
+    requested = str(requested_user_id or "").strip()
+    candidates: list[str] = []
+
+    if requested:
+        candidates.append(requested)
+        try:
+            from src.api.portal_routes import _resolve_entity_ids  # type: ignore
+
+            for val in _resolve_entity_ids(requested):
+                sid = str(val).strip()
+                if sid:
+                    candidates.append(sid)
+        except Exception:
+            pass
+
+    # If caller did not provide user_id, attempt phone-based resolution.
+    if not candidates and to_number:
+        via_phone = await _resolve_user_id_from_phone(redis, to_number)
+        if via_phone:
+            candidates.append(via_phone)
+
+    # Name-based fallback through portal store.
+    if not candidates and user_name:
+        cleaned = " ".join(user_name.lower().split())
+        try:
+            from src.api.portal_routes import _STORE  # type: ignore
+
+            users = _STORE.get("users", []) if isinstance(_STORE, dict) else []
+            for row in users:
+                name = " ".join(str(row.get("name", "")).lower().split())
+                if not name:
+                    continue
+                if cleaned in name or name.startswith(cleaned):
+                    rid = str(row.get("id", "")).strip()
+                    rgstin = str(row.get("gstin", "")).strip()
+                    if rid:
+                        candidates.append(rid)
+                    if rgstin:
+                        candidates.append(rgstin)
+        except Exception:
+            pass
+
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for candidate in candidates:
+        value = str(candidate).strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+
+    # Prefer identifiers that already have twin/feature data in Redis.
+    for candidate in deduped:
+        if await _has_voice_profile_data(redis, candidate):
+            return candidate
+
+    # If no candidate has profile data, return first candidate as best effort.
+    return deduped[0] if deduped else ""
+
+
+def _voice_call_context_key(call_sid: str) -> str:
+    return f"voice:call:ctx:{call_sid}"
+
+
+async def _save_voice_call_context(
+    redis: aioredis.Redis,
+    call_sid: str,
+    user_id: str,
+    user_name: str,
+    to_number: str,
+) -> None:
+    sid = str(call_sid or "").strip()
+    if not sid:
+        return
+
+    payload = {
+        "user_id": str(user_id or "").strip(),
+        "user_name": str(user_name or "").strip(),
+        "to": str(to_number or "").strip(),
+        "saved_at": datetime.utcnow().isoformat(),
+    }
+    await redis.setex(_voice_call_context_key(sid), 86400, json.dumps(payload))
+
+
+async def _read_voice_call_context(redis: aioredis.Redis, call_sid: str) -> dict[str, str]:
+    sid = str(call_sid or "").strip()
+    if not sid:
+        return {}
+    raw = await redis.get(_voice_call_context_key(sid))
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    return {
+        "user_id": str(data.get("user_id", "")).strip(),
+        "user_name": str(data.get("user_name", "")).strip(),
+        "to": str(data.get("to", "")).strip(),
+    }
+
+
+def _action_lines_from_briefing(briefing_lines: list[str]) -> list[str]:
+    actions = [line for line in briefing_lines if line.startswith("Action ")]
+    return actions[:2]
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_inr(amount: float | None) -> str:
+    if amount is None:
+        return "not available"
+    safe = max(0.0, float(amount))
+    return f"INR {safe:,.0f}"
+
+
+def _risk_level_from_twin(risk_score: float) -> str:
+    if risk_score < 0.30:
+        return "LOW RISK"
+    if risk_score < 0.60:
+        return "MEDIUM RISK"
+    return "HIGH RISK"
+
+
+def _derive_gst_factor_sentence(gst_compliance_rate: float | None) -> str:
+    if gst_compliance_rate is None:
+        return "GST data is currently limited, so keep filing on time to strengthen your profile"
+    if gst_compliance_rate >= 0.90:
+        return "Strong GST filing consistency is contributing positively to your profile"
+    if gst_compliance_rate >= 0.70:
+        return "GST filing consistency is moderately positive for your profile"
+    return "GST filing consistency needs improvement and may be limiting your profile"
+
+
+def _risk_level_from_band(risk_band: str | None) -> str:
+    band = str(risk_band or "").strip().lower()
+    if band in {"very_low_risk", "low_risk", "low"}:
+        return "LOW RISK"
+    if band in {"very_high_risk", "high_risk", "high"}:
+        return "HIGH RISK"
+    return "MEDIUM RISK"
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+async def _load_voice_score_snapshot(redis: aioredis.Redis, user_id: str) -> dict[str, Any]:
+    """
+    Resolve the latest completed score payload used by the dashboard score flow.
+    This keeps voice narration consistent with /score/{task_id} values.
+    """
+    if not user_id:
+        return {}
+
+    try:
+        from src.api.portal_routes import _STORE, _SUBMITTED_TASKS, _GSTIN_SCORES, _resolve_entity_ids  # type: ignore
+    except Exception:
+        return {}
+
+    ids = {str(user_id).strip()}
+    try:
+        ids.update(str(v).strip() for v in _resolve_entity_ids(user_id))
+    except Exception:
+        pass
+    ids = {v for v in ids if v}
+
+    users = _STORE.get("users", []) if isinstance(_STORE, dict) else []
+    candidate_gstins: set[str] = {v for v in ids if len(v) == 15 and v[:2].isdigit()}
+    for row in users:
+        rid = str(row.get("id", "")).strip()
+        rgstin = str(row.get("gstin", "")).strip()
+        if rid in ids and rgstin:
+            candidate_gstins.add(rgstin)
+        if rgstin in ids and rgstin:
+            candidate_gstins.add(rgstin)
+
+    # 0) Prefer freshest live credit cache by user/entity aliases.
+    freshest_cache: dict[str, Any] | None = None
+    freshest_at: datetime | None = None
+    cache_keys = sorted(ids | candidate_gstins)
+    for cache_id in cache_keys:
+        row = await redis.hgetall(f"credit:user:{cache_id}")
+        if not row:
+            continue
+
+        credit_score = int(float(row.get("credit_score", 0) or 0))
+        if credit_score <= 0:
+            continue
+
+        refreshed_at = _parse_iso_datetime(row.get("refreshed_at")) or datetime.min
+        if freshest_at is not None and refreshed_at < freshest_at:
+            continue
+
+        recommended_credit = _to_float_or_none(row.get("recommended_credit_limit"))
+        recommended_personal = _to_float_or_none(row.get("recommended_personal_loan_amount"))
+        wc_amount = recommended_credit if recommended_credit is not None else recommended_personal
+        term_amount = recommended_personal if recommended_personal is not None else recommended_credit
+
+        freshest_cache = {
+            "credit_score": max(300, min(900, credit_score)),
+            "risk_band": str(row.get("risk_band", "") or "") or None,
+            "recommended_wc_amount": wc_amount,
+            "recommended_term_amount": term_amount,
+            "gstin": cache_id if len(cache_id) == 15 and cache_id[:2].isdigit() else None,
+            "task_id": None,
+            "source": "credit_cache",
+            "refreshed_at": (refreshed_at if refreshed_at != datetime.min else None),
+        }
+        freshest_at = refreshed_at
+
+    if freshest_cache is not None:
+        return freshest_cache
+
+    # 1) Prefer latest completed dynamic score hash (same source used by /score/{task_id}).
+    task_rows: list[tuple[datetime, str, str]] = []
+    for task_id, entry in (_SUBMITTED_TASKS or {}).items():
+        gstin = str((entry or {}).get("gstin", "")).strip()
+        if candidate_gstins and gstin and gstin not in candidate_gstins:
+            continue
+        created = _parse_iso_datetime((entry or {}).get("created_at")) or datetime.min
+        task_rows.append((created, str(task_id).strip(), gstin))
+    task_rows.sort(key=lambda item: item[0], reverse=True)
+
+    for _, task_id, gstin in task_rows:
+        if not task_id:
+            continue
+        row = await redis.hgetall(f"score:{task_id}")
+        if not row:
+            continue
+        status = str(row.get("status", "")).strip().lower()
+        if status != "complete":
+            continue
+
+        credit_score = int(float(row.get("credit_score", 0) or 0))
+        if credit_score <= 0:
+            continue
+
+        risk_band = str(row.get("risk_band", "")).strip() or None
+        recommended_personal = _to_float_or_none(row.get("recommended_personal_loan_amount"))
+        recommended_credit = _to_float_or_none(row.get("recommended_credit_limit"))
+        wc_amount = recommended_personal if recommended_personal is not None else recommended_credit
+        term_amount = (
+            (recommended_personal * 1.5) if recommended_personal is not None
+            else recommended_credit
+        )
+
+        return {
+            "credit_score": max(300, min(900, credit_score)),
+            "risk_band": risk_band,
+            "recommended_wc_amount": wc_amount,
+            "recommended_term_amount": term_amount,
+            "gstin": gstin,
+            "task_id": task_id,
+        }
+
+    # 2) Fallback to static score object if available for GSTIN.
+    for gstin in candidate_gstins:
+        score = (_GSTIN_SCORES or {}).get(gstin)
+        if not isinstance(score, dict):
+            continue
+        credit_score = int(float(score.get("credit_score", 0) or 0))
+        if credit_score <= 0:
+            continue
+        return {
+            "credit_score": max(300, min(900, credit_score)),
+            "risk_band": score.get("risk_band"),
+            "recommended_wc_amount": _to_float_or_none(score.get("recommended_wc_amount")),
+            "recommended_term_amount": _to_float_or_none(score.get("recommended_term_amount")),
+            "gstin": gstin,
+            "task_id": score.get("task_id"),
+        }
+
+    return {}
+
+
+async def _derive_eligibility_amounts(
+    redis: aioredis.Redis,
+    user_id: str,
+    income_monthly: float,
+    risk_score: float,
+) -> tuple[float, float]:
+    wc_eligible: float | None = None
+    term_eligible: float | None = None
+
+    # 1) Prefer live credit cache if available.
+    credit_cache = await redis.hgetall(f"credit:user:{user_id}")
+    if credit_cache:
+        wc_eligible = _to_float_or_none(
+            credit_cache.get("recommended_credit_limit")
+            or credit_cache.get("recommended_personal_loan_amount")
+        )
+        term_eligible = _to_float_or_none(
+            credit_cache.get("recommended_personal_loan_amount")
+            or credit_cache.get("recommended_credit_limit")
+        )
+
+    # 2) Use proactive offer as backup source.
+    if wc_eligible is None or term_eligible is None:
+        offer_raw = await redis.get(f"tier8:offer:{user_id}")
+        if offer_raw:
+            try:
+                offer = json.loads(offer_raw)
+                approved = _to_float_or_none(offer.get("approved_amount"))
+                if approved is not None:
+                    wc_eligible = wc_eligible if wc_eligible is not None else approved
+                    term_eligible = term_eligible if term_eligible is not None else approved * 1.4
+            except Exception:
+                pass
+
+    # 3) Deterministic fallback from income + risk when no explicit offer exists.
+    if wc_eligible is None or term_eligible is None:
+        if risk_score < 0.30:
+            wc_mult = 4.5
+        elif risk_score < 0.60:
+            wc_mult = 3.0
+        else:
+            wc_mult = 1.8
+        wc_eligible = wc_eligible if wc_eligible is not None else (income_monthly * wc_mult)
+        term_eligible = term_eligible if term_eligible is not None else (wc_eligible * 1.6)
+
+    return float(wc_eligible), float(term_eligible)
+
+
+def _twiml_response(lines: list[str], *, gather_action_url: str | None = None, redirect_url: str | None = None) -> Response:
+    say_blocks = "\n".join([f'  <Say voice="alice">{_safe_speech(line)}</Say>' for line in lines if line.strip()])
+    gather_block = ""
+    if gather_action_url:
+        gather_block = (
+            f'\n  <Gather input="speech" method="POST" speechTimeout="auto" language="en-IN" '
+            f'action="{escape(gather_action_url)}">\n'
+            '    <Say voice="alice">Please continue speaking, or say bye to end the call.</Say>\n'
+            "  </Gather>"
+        )
+
+    redirect_block = ""
+    if redirect_url:
+        redirect_block = f'\n  <Redirect method="POST">{escape(redirect_url)}</Redirect>'
+
+    xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<Response>
+{say_blocks}{gather_block}{redirect_block}
+</Response>"""
+    return Response(content=xml, media_type="text/xml")
+
+
+def _extract_twilio_fields_from_body(raw_body: bytes, content_type: str) -> dict[str, str]:
+    body_text = (raw_body or b"").decode("utf-8", errors="ignore")
+    if not body_text.strip():
+        return {}
+
+    if "application/json" in content_type:
+        try:
+            data = json.loads(body_text)
+            return {str(k): str(v) for k, v in data.items() if v is not None}
+        except Exception:
+            return {}
+
+    parsed = parse_qs(body_text, keep_blank_values=True)
+    out: dict[str, str] = {}
+    for key, values in parsed.items():
+        if not values:
+            continue
+        out[str(key)] = str(values[-1])
+    return out
+
+
+async def _build_voice_overview(redis: aioredis.Redis, user_id: str) -> str:
+    lines, _ = await _build_voice_briefing(redis, user_id)
+    return " ".join(lines)
+
+
+async def _build_voice_briefing(
+    redis: aioredis.Redis,
+    user_id: str,
+    user_name: str | None = None,
+) -> tuple[list[str], str]:
+    resolved_name = str(user_name or "").strip()
+    if user_id:
+        canonical_name = _lookup_user_name_from_store(user_id)
+        if canonical_name:
+            resolved_name = canonical_name
+
+    name = _voice_display_name(resolved_name)
+    intro = f"Hello {name}, this is your AI Financial Assistant calling from your Digital Twin system."
+
+    if not user_id:
+        lines = [
+            intro,
+            "I am here to give you a quick update on your financial health and highlight important insights.",
+            "Your profile is not fully available yet, so please open your dashboard to sync data.",
+        ]
+        return lines, "No user_id provided. Give generic but practical alert guidance."
+
+    from src.intervention.trigger_engine import evaluate_triggers
+    from src.twin.twin_service import TwinService
+
+    twin = await TwinService(redis).get(user_id)
+    if twin is None:
+        lines = [
+            intro,
+            "I am here to give you a quick update on your financial health and highlight important insights.",
+            "Your digital twin profile is not synced yet.",
+            "Please open the app, refresh your data, and I will share detailed alerts.",
+        ]
+        return lines, "Twin profile not available for this user."
+
+    fv = await _load_latest_feature_vector(redis, user_id)
+
+    risk_percent = int(round(twin.risk_score * 100))
+    cibil_like = twin.cibil_like_score()
+    emi_pct = int(round(twin.emi_burden_ratio * 100))
+    liquidity = str(twin.liquidity_health)
+    stability_pct = int(round(float(twin.income_stability) * 100))
+    risk_level = _risk_level_from_twin(float(twin.risk_score))
+
+    income_monthly = 50000.0
+    if fv is not None:
+        income_monthly = max(
+            10000.0,
+            float(fv.income_30d or 0.0)
+            or float((fv.income_90d or 0.0) / 3.0)
+            or 50000.0,
+        )
+    wc_eligible, term_eligible = await _derive_eligibility_amounts(
+        redis, user_id, income_monthly, float(twin.risk_score)
+    )
+
+    # Keep voice values aligned with dashboard score payload when available.
+    score_snapshot = await _load_voice_score_snapshot(redis, user_id)
+    if score_snapshot:
+        cibil_like = int(score_snapshot.get("credit_score", cibil_like) or cibil_like)
+        risk_level = _risk_level_from_band(score_snapshot.get("risk_band"))
+        snap_wc = _to_float_or_none(score_snapshot.get("recommended_wc_amount"))
+        snap_term = _to_float_or_none(score_snapshot.get("recommended_term_amount"))
+        if snap_wc is not None:
+            wc_eligible = snap_wc
+        if snap_term is not None:
+            term_eligible = snap_term
+
+    gst_rate = float(fv.gst_filing_compliance_rate) if fv is not None else None
+    gst_factor = _derive_gst_factor_sentence(gst_rate)
+
+    alert_lines: list[str] = []
+    action_lines: list[str] = []
+    trigger_context: list[str] = []
+    alert_section_line = "There are no critical alerts at this moment."
+
+    try:
+        triggers = evaluate_triggers(twin)
+        if triggers:
+            top = triggers[:3]
+            alert_section_line = "Important alerts need your attention."
+            for idx, trig in enumerate(top, start=1):
+                label = _VOICE_TRIGGER_LABELS.get(trig.trigger_type, trig.trigger_type.replace("_", " "))
+                alert_lines.append(f"Alert {idx}: {label}.")
+                trigger_context.append(
+                    f"{trig.trigger_type} (urgency={trig.urgency:.2f}): {trig.reason}"
+                )
+
+            dedup_actions: list[str] = []
+            for trig in top:
+                for action in trig.suggested_actions:
+                    cleaned = " ".join(str(action).split())
+                    if not cleaned or cleaned in dedup_actions:
+                        continue
+                    dedup_actions.append(cleaned)
+
+            for idx, action in enumerate(dedup_actions[:2], start=1):
+                action_lines.append(f"Action {idx}: {action}.")
+        else:
+            alert_lines.append("Good news: there are no high-priority alerts right now.")
+    except Exception:
+        alert_lines.append("I cannot read trigger alerts right now.")
+
+    ews_context = ""
+    ews_summary = ""
+    try:
+        ews_raw = await redis.get(f"sim:ews:{user_id}")
+        if ews_raw:
+            ews = json.loads(ews_raw)
+            e14 = ews.get("ews_14d")
+            sev = str(ews.get("severity", "")).strip()
+            if isinstance(e14, (int, float)):
+                pct = int(round(float(e14) * 100))
+                ews_summary = f"The 14-day early warning signal is {pct} percent"
+                if sev:
+                    ews_summary += f", with {sev} severity"
+                ews_summary += "."
+                ews_context = ews_summary
+    except Exception:
+        ews_summary = ""
+
+    lines: list[str] = [
+        intro,
+        "I am here to give you a quick update on your financial health and highlight important insights.",
+        alert_section_line,
+    ]
+    lines.extend(alert_lines)
+
+    lines.extend([
+        "Now here is your current financial summary.",
+        f"Your liquidity health is {liquidity}, which indicates your current cash position.",
+        f"Your financial stability is {stability_pct} percent, showing consistent performance.",
+        f"{gst_factor}.",
+        "Moving to your credit profile.",
+        f"Your credit score is {cibil_like} out of 900, which places you in the {risk_level} category.",
+        f"Based on this, you are eligible for a working capital loan of approximately {_format_inr(wc_eligible)}.",
+        f"You are also eligible for a term loan of up to {_format_inr(term_eligible)}.",
+        "Overall, your financial profile is stable.",
+        "Improving liquidity slightly can further strengthen your position and reduce future risk.",
+        "If you want, you can explore strategies or interact with your Digital Twin directly from your dashboard.",
+    ])
+
+    if ews_summary:
+        lines.append(ews_summary)
+    if action_lines:
+        lines.append("Please note the recommended next steps.")
+        lines.extend(action_lines)
+
+    lines.extend([
+        "That is all for now.",
+        "Thank you for using your AI Financial Assistant. Have a great day ahead.",
+    ])
+
+    context = "\n".join([
+        f"User name: {name}",
+        f"Risk score: {risk_percent}/100",
+        f"CIBIL-like score: {cibil_like}",
+        f"Liquidity: {liquidity}",
+        f"Financial stability percent: {stability_pct}",
+        f"Cash buffer days: {twin.cash_buffer_days:.1f}",
+        f"EMI burden percent: {emi_pct}",
+        f"GST filing compliance rate: {gst_rate if gst_rate is not None else 'Unavailable'}",
+        f"Working capital eligible: {wc_eligible:.2f}",
+        f"Term loan eligible: {term_eligible:.2f}",
+        f"Risk level category: {risk_level}",
+        f"EWS: {ews_context or 'Unavailable'}",
+        "Alerts:",
+        *(trigger_context or ["No high-priority trigger alerts."]),
+        "Actions:",
+        *(action_lines or ["No immediate action required."]),
+    ])
+    return lines, context
 
 
 async def _groq_voice_reply(user_text: str) -> str:
@@ -196,23 +901,35 @@ async def health() -> dict[str, str]:
 async def start_voice_call(body: dict[str, Any], request: Request) -> dict[str, Any]:
     to_number = str(body.get("to", "")).strip()
     user_id = str(body.get("userId", "")).strip()
+    user_name = str(body.get("userName", "")).strip()
     if not re.fullmatch(r"\+[1-9]\d{7,14}", to_number):
         raise HTTPException(
             status_code=400,
-            detail="Provide a valid phone number in E.164 format, e.g. +919876543210",
+            detail="Provide a valid phone number in E.164 format, e.g. +***REMOVED***",
         )
+
+    redis: aioredis.Redis = app.state.redis
+    resolved_user_id = await _resolve_voice_user_id(redis, user_id, user_name, to_number)
+    if resolved_user_id:
+        user_id = resolved_user_id
+
+    if user_id:
+        user_name = _lookup_user_name_from_store(user_id) or user_name
 
     account_sid = (
         os.getenv("TWILIO_ACCOUNT_SID", "").strip()
         or os.getenv("TWILIO_SID", "").strip()
+        or settings.twilio_account_sid.strip()
     )
     auth_token = (
         os.getenv("TWILIO_AUTH_TOKEN", "").strip()
         or os.getenv("TWILIO_TOKEN", "").strip()
+        or settings.twilio_auth_token.strip()
     )
     from_number = (
         os.getenv("TWILIO_PHONE_NUMBER", "").strip()
         or os.getenv("TWILIO_FROM_NUMBER", "").strip()
+        or settings.twilio_phone_number.strip()
     )
     if not account_sid or not auth_token or not from_number:
         raise HTTPException(
@@ -224,34 +941,49 @@ async def start_voice_call(body: dict[str, Any], request: Request) -> dict[str, 
         )
 
     base_url = _resolve_webhook_base_url(request)
-    if not base_url:
-        raise HTTPException(
-            status_code=400,
-            detail="Missing VOICE_PUBLIC_BASE_URL or DOMAIN for Twilio webhooks.",
-        )
+    reachable = bool(base_url) and await _is_reachable(base_url)
 
-    reachable = await _is_reachable(base_url)
-    if not reachable:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Public webhook URL is not reachable: {base_url}. "
-                "Start or refresh your tunnel and update VOICE_PUBLIC_BASE_URL."
-            ),
-        )
-
-    query = urlencode({"userId": user_id}) if user_id else ""
-    webhook = f"{base_url}/voice/call/incoming"
-    if query:
-        webhook = f"{webhook}?{query}"
+    query_params: dict[str, str] = {}
+    if user_id:
+        query_params["userId"] = user_id
+    if user_name:
+        query_params["userName"] = user_name
+    query = urlencode(query_params) if query_params else ""
+    webhook = ""
+    if base_url:
+        webhook = f"{base_url}/voice/call/incoming"
+        if query:
+            webhook = f"{webhook}?{query}"
 
     twilio_url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Calls.json"
     payload = {
         "To": to_number,
         "From": from_number,
-        "Url": webhook,
-        "Method": "POST",
     }
+
+    # Interactive mode when public webhook is reachable; otherwise fallback to alert-only TwiML.
+    call_mode = "interactive"
+    if reachable and webhook:
+        payload.update({
+            "Url": webhook,
+            "Method": "POST",
+        })
+    else:
+        briefing_lines, _ = await _build_voice_briefing(redis, user_id, user_name)
+        say_blocks = "".join(
+            f'<Say voice="alice">{_safe_speech(line)}</Say>'
+            for line in briefing_lines
+        )
+        twiml_alert = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<Response>"
+            f"{say_blocks}"
+            f"<Say voice=\"alice\">{_safe_speech('Please open the app for detailed actions.')}</Say>"
+            "<Hangup/>"
+            "</Response>"
+        )
+        payload["Twiml"] = twiml_alert
+        call_mode = "alert_fallback"
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -268,12 +1000,20 @@ async def start_voice_call(body: dict[str, Any], request: Request) -> dict[str, 
             )
 
         call_data = response.json()
+        await _save_voice_call_context(
+            redis,
+            str(call_data.get("sid", "")),
+            user_id,
+            user_name,
+            to_number,
+        )
         return {
             "ok": True,
             "callSid": call_data.get("sid"),
             "status": call_data.get("status"),
             "to": call_data.get("to"),
             "from": call_data.get("from"),
+            "mode": call_mode,
         }
     except HTTPException:
         raise
@@ -283,105 +1023,186 @@ async def start_voice_call(body: dict[str, Any], request: Request) -> dict[str, 
 
 @app.api_route("/voice/call/incoming", methods=["GET", "POST"])
 async def voice_call_incoming(request: Request) -> Response:
-    base_url = _resolve_webhook_base_url(request) or ""
-    user_id = str(request.query_params.get("userId", "")).strip()
-    query = urlencode({"userId": user_id}) if user_id else ""
-    respond_url = f"{base_url}/voice/call/respond"
-    if query:
-        respond_url = f"{respond_url}?{query}"
+    try:
+        base_url = _resolve_webhook_base_url(request) or ""
+        user_id = str(request.query_params.get("userId", "")).strip()
+        user_name = str(request.query_params.get("userName", "")).strip()
+        redis: aioredis.Redis = app.state.redis
 
-    xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<Response>
-  <Say voice=\"alice\">Welcome to Vyapar Saathi assistant.</Say>
-  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(respond_url)}\">
-    <Say voice=\"alice\">You can ask me about earnings, expenses, profit, stock, or what to do next.</Say>
-  </Gather>
-  <Say voice=\"alice\">I did not catch that.</Say>
-  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
-</Response>"""
-    return Response(content=xml, media_type="text/xml")
+        raw_body = await request.body()
+        ctype = str(request.headers.get("content-type", "")).lower()
+        fields = _extract_twilio_fields_from_body(raw_body, ctype)
+        call_sid = str(fields.get("CallSid", "")).strip()
+        call_to = str(fields.get("To", "")).strip()
+
+        if call_sid and (not user_id or not user_name):
+            ctx = await _read_voice_call_context(redis, call_sid)
+            if not user_id:
+                user_id = ctx.get("user_id", "")
+            if not user_name:
+                user_name = ctx.get("user_name", "")
+
+        if not user_id:
+            user_id = await _resolve_voice_user_id(redis, "", user_name, call_to)
+        if user_id:
+            user_name = _lookup_user_name_from_store(user_id) or user_name
+
+        query_params: dict[str, str] = {}
+        if user_id:
+            query_params["userId"] = user_id
+        if user_name:
+            query_params["userName"] = user_name
+        query = urlencode(query_params) if query_params else ""
+        respond_url = f"{base_url}/voice/call/respond"
+        if query:
+            respond_url = f"{respond_url}?{query}"
+        incoming_url = f"{base_url}/voice/call/incoming"
+        if query:
+            incoming_url = f"{incoming_url}?{query}"
+
+        briefing_lines, _ = await _build_voice_briefing(redis, user_id, user_name)
+        return _twiml_response(
+            briefing_lines + ["You can now ask for details on any alert, cashflow, or EMI planning."],
+            gather_action_url=respond_url,
+            redirect_url=incoming_url,
+        )
+    except Exception:
+        return _twiml_response([
+            "Welcome to NeuroCred assistant.",
+            "I hit a temporary issue, but I am still here to help. Please say your question again.",
+        ])
 
 
 @app.api_route("/voice/call/respond", methods=["GET", "POST"])
 async def voice_call_respond(request: Request) -> Response:
-    base_url = _resolve_webhook_base_url(request) or ""
-    user_id = str(request.query_params.get("userId", "")).strip()
-    query = urlencode({"userId": user_id}) if user_id else ""
-    next_url = f"{base_url}/voice/call/respond"
-    if query:
-        next_url = f"{next_url}?{query}"
+    try:
+        base_url = _resolve_webhook_base_url(request) or ""
+        user_id = str(request.query_params.get("userId", "")).strip()
+        user_name = str(request.query_params.get("userName", "")).strip()
+        raw_body = await request.body()
+        ctype = str(request.headers.get("content-type", "")).lower()
+        fields = _extract_twilio_fields_from_body(raw_body, ctype)
+        speech_text = str(fields.get("SpeechResult", "")).strip()
+        call_sid = str(fields.get("CallSid", "")).strip()
+        call_to = str(fields.get("To", "")).strip()
 
-    form = await request.form()
-    speech_text = str(form.get("SpeechResult", "")).strip()
-    call_sid = str(form.get("CallSid", "")).strip()
+        redis: aioredis.Redis = app.state.redis
+        if call_sid and (not user_id or not user_name):
+            ctx = await _read_voice_call_context(redis, call_sid)
+            if not user_id:
+                user_id = ctx.get("user_id", "")
+            if not user_name:
+                user_name = ctx.get("user_name", "")
 
-    if not speech_text:
-        xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<Response>
-  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(next_url)}\">
-    <Say voice=\"alice\">I could not hear you clearly. Please say that again.</Say>
-  </Gather>
-  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
-</Response>"""
-        return Response(content=xml, media_type="text/xml")
+        if not user_id:
+            user_id = await _resolve_voice_user_id(redis, "", user_name, call_to)
+        if user_id:
+            user_name = _lookup_user_name_from_store(user_id) or user_name
 
-    if re.search(r"\b(bye|goodbye|end call|stop|hang up|thank you)\b", speech_text, re.I):
-        xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<Response>
-  <Say voice=\"alice\">Thank you. Ending the call now. Have a productive day.</Say>
-  <Hangup/>
-</Response>"""
-        return Response(content=xml, media_type="text/xml")
+        query_params: dict[str, str] = {}
+        if user_id:
+            query_params["userId"] = user_id
+        if user_name:
+            query_params["userName"] = user_name
+        query = urlencode(query_params) if query_params else ""
+        next_url = f"{base_url}/voice/call/respond"
+        if query:
+            next_url = f"{next_url}?{query}"
+        incoming_url = f"{base_url}/voice/call/incoming"
+        if query:
+            incoming_url = f"{incoming_url}?{query}"
 
-    redis: aioredis.Redis = app.state.redis
-    voice_user_id = user_id or "voice_anonymous"
-    voice_session_id = _sanitize_chat_session_id(f"call_{call_sid}") if call_sid else None
-
-    conversation_prompt = speech_text
-    voice_session: dict[str, Any] | None = None
-    if voice_session_id:
-        voice_session = await _read_twin_chat_session(redis, voice_user_id, voice_session_id)
-        if voice_session is None:
-            voice_session = _new_twin_chat_session(voice_user_id, voice_session_id)
-
-        history_lines: list[str] = []
-        for turn in voice_session.get("messages", [])[-8:]:
-            role = str(turn.get("role", "")).lower()
-            content = str(turn.get("content", "")).strip()
-            if not content:
-                continue
-            prefix = "User" if role == "user" else "Assistant"
-            clipped = content if len(content) <= 180 else (content[:180] + "...")
-            history_lines.append(f"{prefix}: {clipped}")
-
-        if history_lines:
-            conversation_prompt = (
-                "Conversation so far:\n"
-                + "\n".join(history_lines)
-                + f"\nUser: {speech_text}"
+        if not speech_text:
+            return _twiml_response(
+                ["I could not hear you clearly. Please say that again."],
+                gather_action_url=next_url,
+                redirect_url=incoming_url,
             )
 
-    reply = await _groq_voice_reply(conversation_prompt)
+        if re.search(r"\b(bye|goodbye|end call|stop|hang up|thank you)\b", speech_text, re.I):
+            return _twiml_response(["Thank you. Ending the call now. Have a productive day."])
 
-    if voice_session is not None:
-        ts = datetime.utcnow().isoformat()
-        msgs = voice_session.setdefault("messages", [])
-        msgs.append({"role": "user", "content": speech_text, "ts": ts})
-        msgs.append({"role": "assistant", "content": reply, "ts": ts})
-        voice_session["messages"] = msgs[-_TWIN_CHAT_MAX_MESSAGES:]
-        voice_session["updated_at"] = ts
-        await _save_twin_chat_session(redis, voice_session)
+        briefing_lines, briefing_context = await _build_voice_briefing(redis, user_id, user_name)
+        voice_user_id = user_id or "voice_anonymous"
+        voice_session_id = _sanitize_chat_session_id(f"call_{call_sid}") if call_sid else None
 
-    safe_reply = _safe_speech(reply)
-    xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
-<Response>
-  <Say voice=\"alice\">{safe_reply}</Say>
-  <Gather input=\"speech\" method=\"POST\" speechTimeout=\"auto\" language=\"en-IN\" action=\"{escape(next_url)}\">
-    <Say voice=\"alice\">You can continue speaking, or say bye to end the call.</Say>
-  </Gather>
-  <Redirect method=\"POST\">{escape(base_url)}/voice/call/incoming{('?' + query) if query else ''}</Redirect>
-</Response>"""
-    return Response(content=xml, media_type="text/xml")
+        # If caller explicitly asks for status/alerts, return deterministic summary.
+        if re.search(r"\b(status|overview|summary|alert|risk|warning|twin)\b", speech_text, re.I):
+            return _twiml_response(
+                briefing_lines + ["If you want, I can explain the reason behind each alert and the next best action."],
+                gather_action_url=next_url,
+                redirect_url=incoming_url,
+            )
+        else:
+            conversation_prompt = (
+                "Speak in concise Indian English with a warm, practical tone. "
+                "Use the user's name respectfully and keep guidance action-oriented.\n\n"
+                f"Twin briefing:\n{briefing_context}\n\n"
+                f"User question: {speech_text}"
+            )
+            has_groq = bool(os.getenv("GROQ_API_KEY", "").strip())
+            voice_session: dict[str, Any] | None = None
+            if voice_session_id:
+                voice_session = await _read_twin_chat_session(redis, voice_user_id, voice_session_id)
+                if voice_session is None:
+                    voice_session = _new_twin_chat_session(voice_user_id, voice_session_id)
+
+                history_lines: list[str] = []
+                for turn in voice_session.get("messages", [])[-8:]:
+                    role = str(turn.get("role", "")).lower()
+                    content = str(turn.get("content", "")).strip()
+                    if not content:
+                        continue
+                    prefix = "User" if role == "user" else "Assistant"
+                    clipped = content if len(content) <= 180 else (content[:180] + "...")
+                    history_lines.append(f"{prefix}: {clipped}")
+
+                if history_lines:
+                    conversation_prompt = (
+                        "Conversation so far:\n"
+                        + "\n".join(history_lines)
+                        + f"\nTwin context:\n{briefing_context}\nUser: {speech_text}"
+                    )
+
+                if has_groq:
+                    reply = await _groq_voice_reply(conversation_prompt)
+                else:
+                    actions = _action_lines_from_briefing(briefing_lines)
+                    if actions:
+                        reply = "AI service is temporarily unavailable. Recommended immediate actions: " + " ".join(actions)
+                    else:
+                        reply = "AI service is temporarily unavailable. Please keep a close watch on cashflow and active alerts in the app."
+
+                ts = datetime.utcnow().isoformat()
+                msgs = voice_session.setdefault("messages", [])
+                msgs.append({"role": "user", "content": speech_text, "ts": ts})
+                msgs.append({"role": "assistant", "content": reply, "ts": ts})
+                voice_session["messages"] = msgs[-_TWIN_CHAT_MAX_MESSAGES:]
+                voice_session["updated_at"] = ts
+                await _save_twin_chat_session(redis, voice_session)
+            else:
+                if has_groq:
+                    reply = await _groq_voice_reply(conversation_prompt)
+                else:
+                    actions = _action_lines_from_briefing(briefing_lines)
+                    if actions:
+                        reply = "AI service is temporarily unavailable. Recommended immediate actions: " + " ".join(actions)
+                    else:
+                        reply = "AI service is temporarily unavailable. Please keep a close watch on cashflow and active alerts in the app."
+
+        return _twiml_response(
+            [reply],
+            gather_action_url=next_url,
+            redirect_url=incoming_url,
+        )
+    except Exception:
+        return _twiml_response(
+            [
+                "I hit a temporary technical issue in call processing.",
+                "Please try again in a few seconds, or ask for your status and alerts.",
+            ],
+            gather_action_url=f"{_resolve_webhook_base_url(request) or ''}/voice/call/respond",
+        )
 
 
 # ── Tier 1: ingestion trigger ─────────────────────────────────────────────────
@@ -564,6 +1385,20 @@ async def get_twin(user_id: str) -> dict[str, Any]:
         )
     data = twin.model_dump()
     data["cibil_like_score"] = twin.cibil_like_score()
+
+    # Keep twin card values aligned with the latest computed scoring snapshot.
+    score_snapshot = await _load_voice_score_snapshot(app.state.redis, user_id)
+    if score_snapshot:
+        resolved_credit = int(score_snapshot.get("credit_score", data["cibil_like_score"]) or data["cibil_like_score"])
+        resolved_credit = max(300, min(900, resolved_credit))
+        data["cibil_like_score"] = resolved_credit
+        data["latest_score"] = score_snapshot
+        data["risk_band"] = score_snapshot.get("risk_band")
+        data["recommended_wc_amount"] = score_snapshot.get("recommended_wc_amount")
+        data["recommended_term_amount"] = score_snapshot.get("recommended_term_amount")
+        # If twin risk is still default/zero, derive a display fallback from score.
+        if float(data.get("risk_score", 0.0) or 0.0) <= 0.0:
+            data["risk_score"] = round(max(0.0, min(1.0, (900 - resolved_credit) / 600.0)), 4)
 
     # Prefer generated raw transaction data for timeline; fall back to synthetic timeline.
     from src.api.portal_routes import _get_real_transactions, build_monthly_timeline, window_agg
@@ -955,8 +1790,23 @@ async def chat_with_twin(user_id: str, body: dict[str, Any]) -> Any:
 
     history = session.get("messages", [])[-12:]
 
+    score_snapshot = await _load_voice_score_snapshot(redis, user_id)
+    cibil_override = None
+    if score_snapshot:
+        try:
+            parsed_score = int(float(score_snapshot.get("credit_score", 0) or 0))
+            if parsed_score > 0:
+                cibil_override = max(300, min(900, parsed_score))
+        except Exception:
+            cibil_override = None
+
     dm = DialogueManager()
-    response_data = dm.chat(message, twin, conversation_history=history)
+    response_data = dm.chat(
+        message,
+        twin,
+        conversation_history=history,
+        cibil_override=cibil_override,
+    )
 
     ts = datetime.utcnow().isoformat()
     messages = session.setdefault("messages", [])

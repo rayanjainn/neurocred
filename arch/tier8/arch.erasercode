@@ -1,0 +1,40 @@
+title Tier 8 - Intervention, Negotiation, Dialogue, and Audit
+
+direction right
+
+Inputs [icon: inbox, color: teal] {
+  Twin Updated Event [icon: radio, label: "pubsub: twin_updated"]
+  Twin State [icon: user, label: "current + history context"]
+}
+
+Intervention Core [icon: cpu, color: purple] {
+  Trigger Engine [icon: alert-circle, label: "liquidity/emi/overspend\nlifestyle/savings/fraud/new-credit"]
+  Relevance Scorer [icon: calculator, label: "urgency + personalization\nacceptance + safety"]
+  Notification Service [icon: send, label: "push/sms/whatsapp dispatch"]
+}
+
+Negotiation [icon: message-square, color: orange] {
+  Offer Generator [icon: gift, label: "prequalified micro-loan"]
+  Session Engine [icon: repeat, label: "intent parse\nimpact simulation\nconfirm/reject"]
+}
+
+Dialogue and Reports [icon: file-text, color: green] {
+  Dialogue Manager [icon: bot, label: "intent-aware twin responses"]
+  Report Generator [icon: file, label: "daily/weekly summaries"]
+  Audit Logger [icon: shield, label: "append-only audit trail"]
+}
+
+Twin Updated Event --> Trigger Engine: react to state change
+Twin State --> Trigger Engine: evaluate thresholds
+Trigger Engine --> Relevance Scorer: compute relevance
+Relevance Scorer --> Notification Service: send when allowed
+Trigger Engine --> Offer Generator: build proactive offer
+Offer Generator --> Session Engine: start negotiation
+Session Engine --> Twin State: apply confirmed patch
+Twin State --> Dialogue Manager: respond with context
+Twin State --> Report Generator: generate summaries
+Trigger Engine --> Audit Logger: log trigger
+Notification Service --> Audit Logger: log send event
+Session Engine --> Audit Logger: log negotiation events
+Dialogue Manager --> Audit Logger: log chat interactions
+Report Generator --> Audit Logger: log report generation
