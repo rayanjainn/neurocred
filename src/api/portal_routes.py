@@ -1013,21 +1013,89 @@ _GSTIN_NAMES = {
 }
 
 
+def _decode_redis_hash(row: dict[Any, Any]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for k, v in row.items():
+        key = k.decode("utf-8") if isinstance(k, bytes) else str(k)
+        val = v.decode("utf-8") if isinstance(v, bytes) else str(v)
+        out[key] = val
+    return out
+
+
+def _parse_iso_dt_or_min(raw: str | None) -> datetime:
+    if not raw:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    try:
+        dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+async def _get_live_credit_snapshot(request: Request, *identifiers: Any) -> tuple[int | None, str | None]:
+    """Fetch latest score for entity aliases from scoring_worker cache in Redis."""
+    redis = request.app.state.redis
+
+    candidate_ids: list[str] = []
+    for raw in identifiers:
+        token = str(raw or "").strip()
+        if token and token not in candidate_ids:
+            candidate_ids.append(token)
+
+    best_score: int | None = None
+    best_band: str | None = None
+    best_refreshed = datetime.min.replace(tzinfo=timezone.utc)
+
+    for cid in candidate_ids:
+        try:
+            row = await redis.hgetall(f"credit:user:{cid}")
+        except Exception:
+            continue
+        if not row:
+            continue
+
+        parsed = _decode_redis_hash(row)
+        try:
+            score = int(float(parsed.get("credit_score", "0") or 0))
+        except Exception:
+            score = 0
+        if score <= 0:
+            continue
+
+        refreshed = _parse_iso_dt_or_min(parsed.get("refreshed_at"))
+        if refreshed >= best_refreshed:
+            best_refreshed = refreshed
+            best_score = max(300, min(900, score))
+            band = str(parsed.get("risk_band", "")).strip()
+            best_band = band or None
+
+    return best_score, best_band
+
+
 @router.get("/explorer/gstins")
-async def get_explorer_gstins() -> list[dict[str, Any]]:
+async def get_explorer_gstins(request: Request) -> list[dict[str, Any]]:
     # 1. Start with hardcoded system nodes (always present for demo)
     result = []
     seen = set()
     for gstin, name in _GSTIN_NAMES.items():
         score = _GSTIN_SCORES.get(gstin)
+        disk_row = _find_entity_on_disk(gstin)
+        disk_uid = (disk_row or {}).get("user_id")
         if score:
             score_val = int(score.get("credit_score", 700))
             band = str(score.get("risk_band", "low_risk"))
         else:
-            disk_row = _find_entity_on_disk(gstin)
             profile_type = (disk_row or {}).get("profile_type", "HEALTHY_MSME")
             age_months = int((disk_row or {}).get("age_months", 24) or 24)
             score_val, band = _get_generated_score_and_band(profile_type, age_months, gstin)
+
+        live_score, live_band = await _get_live_credit_snapshot(request, gstin, disk_uid)
+        if live_score is not None:
+            score_val = live_score
+            if live_band:
+                band = live_band
 
         profile = "FRAUD_SHELL" if band == "high_risk" else (
             "STRUGGLING_MSME" if band == "medium_risk" else "HEALTHY_MSME"
@@ -1060,6 +1128,12 @@ async def get_explorer_gstins() -> list[dict[str, Any]]:
                 score_row = _GSTIN_SCORES.get(g)
                 final_score = int(score_row.get("credit_score", score_val)) if score_row else score_val
                 final_band = str(score_row.get("risk_band", band)) if score_row else band
+
+                live_score, live_band = await _get_live_credit_snapshot(request, g, row.get("user_id"))
+                if live_score is not None:
+                    final_score = live_score
+                    if live_band:
+                        final_band = live_band
                 
                 result.append({
                     "gstin": g,
@@ -1682,6 +1756,17 @@ async def get_explorer_details(gstin: str, request: Request) -> dict[str, Any]:
         band = str(score.get("risk_band", "low_risk"))
     else:
         score_val, band = _get_generated_score_and_band(profile_type, age_months, gstin)
+
+    live_score, live_band = await _get_live_credit_snapshot(
+        request,
+        gstin,
+        (disk_row or {}).get("user_id"),
+        (user or {}).get("id"),
+    )
+    if live_score is not None:
+        score_val = live_score
+        if live_band:
+            band = live_band
 
     # Fetch real event data from Redis stream (Tier 2 typed events).
     upi_txns, ewb_txns = await _get_stream_transactions(request, gstin, limit=60_000)
