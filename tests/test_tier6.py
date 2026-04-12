@@ -791,7 +791,9 @@ class TestOutputEmitter:
     def _make_mock_redis(self) -> MagicMock:
         redis = MagicMock()
         redis.setex = AsyncMock(return_value=True)
+        redis.set = AsyncMock(return_value=True)
         redis.hset = AsyncMock(return_value=True)
+        redis.hgetall = AsyncMock(return_value={})
         redis.publish = AsyncMock(return_value=1)
         redis.get = AsyncMock(return_value=None)
         return redis
@@ -830,8 +832,7 @@ class TestOutputEmitter:
         redis = self._make_mock_redis()
         result = self._make_sim_result()
         asyncio.run(emit_simulation_completed(redis, "u_0001", result))
-        assert redis.setex.call_count >= 2
-        assert redis.hset.called
+        assert redis.set.called
         assert redis.publish.called
 
     def test_emit_marks_update(self):
@@ -873,11 +874,31 @@ class FakeRedisForSim:
     async def get(self, key: str):
         return self._store.get(key)
 
+    async def set(self, key: str, val: str) -> None:
+        self._store[key] = val
+
     async def hset(self, key: str, mapping: dict | None = None, **kwargs) -> None:
         pass
 
+    async def hgetall(self, key: str) -> dict:
+        return {}
+
     async def publish(self, channel: str, msg: str) -> None:
         pass
+
+    def pipeline(self):
+        class FakePipeline:
+            def __init__(self, store): self._store = store
+            def set(self, k, v, *args, **kwargs): self._store[k] = v; return self
+            def hset(self, k, mapping=None, **kwargs): return self
+            def lpush(self, k, v): return self
+            def ltrim(self, k, start, end): return self
+            async def execute(self): pass
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            async def __aenter__(self): return self
+            async def __aexit__(self, *args): pass
+        return FakePipeline(self._store)
 
     async def aclose(self) -> None:
         pass

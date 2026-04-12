@@ -15,6 +15,10 @@ interface VoiceModalProps {
   dataContext?: any;
 }
 
+function twinChatSessionKey(userId: string) {
+  return `twin.chat.session.${userId}`;
+}
+
 export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModalProps) {
   const { user } = useAuth();
   const [mounted, setMounted] = useState(false);
@@ -25,6 +29,7 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
   const [response, setResponse] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [profileImageSeed, setProfileImageSeed] = useState<string | null>(null);
+  const [chatSessionId, setChatSessionId] = useState("");
   const recognitionRef = useRef<any>(null);
   const synthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
   const lastSpokenRef = useRef("");
@@ -75,6 +80,20 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
     };
   }, []);
 
+  useEffect(() => {
+    if (!isOpen || typeof window === "undefined") return;
+    const userId =
+      dataContext?.user_id ||
+      dataContext?.userId ||
+      user?.id ||
+      "";
+    if (!userId) return;
+    const existing = window.localStorage.getItem(twinChatSessionKey(userId));
+    if (existing) {
+      setChatSessionId(existing);
+    }
+  }, [isOpen, dataContext?.user_id, dataContext?.userId, user?.id]);
+
   // Process transcript once listening stops
   useEffect(() => {
     if (manualProcessRef.current) {
@@ -119,69 +138,18 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
         throw new Error("No active user context found for twin chat.");
       }
 
-      // Pull live backend context on every prompt so voice reasoning is dynamic.
-      const [twinState, twinHistory, twinTriggers, twinReport] = await Promise.all([
-        twinApi.get(userId).catch(() => null),
-        twinApi.getHistory(userId).catch(() => []),
-        twinApi.getTriggers(userId).catch(() => []),
-        twinApi.getReport(userId).catch(() => null),
-      ]);
-
-      // Fetch fresh score snapshot when GSTIN is available.
-      const gstin = dataContext?.gstin || user?.gstin || dataContext?.user_profile?.gstin;
-      let latestScore: any = null;
-      if (gstin) {
-        try {
-          const { scoreApi } = await import("@/dib/api");
-          const submit: any = await scoreApi.submit(String(gstin));
-          if (submit?.task_id) {
-            for (let i = 0; i < 3; i += 1) {
-              const snap: any = await scoreApi.get(submit.task_id).catch(() => null);
-              if (snap?.status === "complete") {
-                latestScore = snap;
-                break;
-              }
-              await new Promise((resolve) => setTimeout(resolve, 800));
-            }
-          }
-        } catch {
-          // Best-effort enrichment; fallback to available local context below.
-        }
-      }
-
-      const dynamicContext = {
-        ...(dataContext || {}),
-        user_profile: {
-          id: user?.id,
-          name: user?.name,
-          role: user?.role,
-          gstin: user?.gstin,
-        },
-        twin_state: twinState,
-        twin_history: Array.isArray(twinHistory) ? twinHistory.slice(0, 6) : twinHistory,
-        twin_triggers: Array.isArray(twinTriggers) ? twinTriggers.slice(0, 6) : twinTriggers,
-        twin_report: twinReport,
-        latest_score: latestScore || {
-          credit_score: dataContext?.credit_score,
-          risk_band: dataContext?.risk_band,
-          recommended_wc_amount: dataContext?.recommended_wc_amount,
-          recommended_term_amount: dataContext?.recommended_term_amount,
-          data_maturity_months: dataContext?.data_maturity_months,
-          top_reasons: dataContext?.top_reasons,
-        },
-      };
-
-      const res = await fetch("/api/twin-chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: text,
-          userId,
-          dataContext: dynamicContext,
-        }),
+      const data: any = await twinApi.chat(userId, {
+        message: text,
+        chat_session_id: chatSessionId || undefined,
       });
 
-      const data: any = await res.json();
+      const nextSessionId = String(data?.chat_session_id || "").trim();
+      if (nextSessionId) {
+        setChatSessionId(nextSessionId);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(twinChatSessionKey(userId), nextSessionId);
+        }
+      }
 
       setIsProcessing(false);
 

@@ -32,6 +32,47 @@ function fmtINR(n: number) {
   return `₹${n.toLocaleString("en-IN")}`;
 }
 
+function normalizeCotSteps(cot: any): any[] {
+  const direct = cot?.steps ?? cot?.chain_of_thought ?? cot?.cot_trace;
+  if (Array.isArray(direct)) return direct;
+  if (direct && typeof direct === "object") {
+    return Object.entries(direct)
+      .filter(([, val]) => val !== undefined && val !== null)
+      .map(([key, val]) => {
+        const title = String(key).replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+        if (typeof val === "string" || typeof val === "number" || typeof val === "boolean") {
+          return { title, content: String(val) };
+        }
+        if (Array.isArray(val)) {
+          return { title, content: JSON.stringify(val, null, 2) };
+        }
+        return { title, ...(val as Record<string, unknown>), content: JSON.stringify(val, null, 2) };
+      });
+  }
+
+  if (cot && typeof cot === "object") {
+    const derived: any[] = [];
+    if (cot.risk_narrative || cot.narrative) {
+      derived.push({ title: "Narrative", content: String(cot.risk_narrative ?? cot.narrative) });
+    }
+    if (cot.situation) {
+      derived.push({ title: "Situation", content: String(cot.situation) });
+    }
+    if (cot.confidence !== undefined) {
+      derived.push({ title: "Confidence", content: `${Math.round(Number(cot.confidence) * 100)}%` });
+    }
+    if (Array.isArray(cot.active_flags) && cot.active_flags.length > 0) {
+      derived.push({ title: "Concern Flags", content: JSON.stringify(cot.active_flags, null, 2) });
+    }
+    if (Array.isArray(cot.intent_signals) && cot.intent_signals.length > 0) {
+      derived.push({ title: "Intent Signals", content: JSON.stringify(cot.intent_signals, null, 2) });
+    }
+    return derived;
+  }
+
+  return [];
+}
+
 function ReasoningTab({ cotSteps, loading }: { cotSteps: any[]; loading: boolean }) {
   const [expanded, setExpanded] = useState<number[]>([]);
   const toggle = (i: number) =>
@@ -142,6 +183,11 @@ export default function MsmeTwinPage() {
         reasoningApi.getCot(user.id).catch(() => null),
       ]);
 
+      let resolvedCot = cotData;
+      if (!resolvedCot) {
+        resolvedCot = await reasoningApi.getResult(user.id).catch(() => null);
+      }
+
       setTwin(tw);
       setHistory(Array.isArray(hist) ? hist : (hist as any)?.history ?? []);
       const triggerPayload = Array.isArray(trig) ? { triggers: trig } : ((trig as any) ?? {});
@@ -158,7 +204,7 @@ export default function MsmeTwinPage() {
       });
       triggerSignatureRef.current = signature;
       triggerBootstrappedRef.current = true;
-      setCot(cotData);
+      setCot(resolvedCot);
     } finally {
       setLoading(false);
     }
@@ -791,7 +837,7 @@ export default function MsmeTwinPage() {
   const riskDelta = simResult?.risk_delta ?? simResult?.delta_risk_score ?? day90?.default_probability;
   const activeOffer = useMemo(() => offer ?? simResult?.proactive_offer ?? null, [offer, simResult]);
   const newLimit = activeOffer?.approved_amount ?? simResult?.recommended_credit_limit ?? simResult?.new_credit_limit;
-  const cotSteps: any[] = cot?.steps ?? cot?.chain_of_thought ?? [];
+  const cotSteps: any[] = normalizeCotSteps(cot);
 
   const SEVERITY_COLOR: Record<string, string> = {
     critical: "text-red-400 bg-red-500/10 border-red-500/20",
