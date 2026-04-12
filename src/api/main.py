@@ -109,7 +109,9 @@ def _normalize_public_base(raw: str | None) -> str | None:
 
 def _resolve_webhook_base_url(request: Request) -> str | None:
     configured = _normalize_public_base(
-        os.getenv("VOICE_PUBLIC_BASE_URL") or os.getenv("DOMAIN")
+        os.getenv("VOICE_PUBLIC_BASE_URL")
+        or os.getenv("PUBLIC_VOICE_URL")
+        or os.getenv("DOMAIN")
     )
     if configured:
         return configured
@@ -198,9 +200,18 @@ async def start_voice_call(body: dict[str, Any], request: Request) -> dict[str, 
             detail="Provide a valid phone number in E.164 format, e.g. +919876543210",
         )
 
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
-    from_number = os.getenv("TWILIO_PHONE_NUMBER", "").strip()
+    account_sid = (
+        os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+        or os.getenv("TWILIO_SID", "").strip()
+    )
+    auth_token = (
+        os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+        or os.getenv("TWILIO_TOKEN", "").strip()
+    )
+    from_number = (
+        os.getenv("TWILIO_PHONE_NUMBER", "").strip()
+        or os.getenv("TWILIO_FROM_NUMBER", "").strip()
+    )
     if not account_sid or not auth_token or not from_number:
         raise HTTPException(
             status_code=400,

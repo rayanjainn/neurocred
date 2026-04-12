@@ -3,9 +3,10 @@
 import { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, X, Loader2 } from "lucide-react";
+import { Mic, MicOff, X, Loader2, Send } from "lucide-react";
 import { TwinEnergyAura } from "@/components/TwinEnergyAura";
 import { cn } from "@/dib/utils";
+import { useAuth } from "@/dib/authContext";
 
 interface VoiceModalProps {
   isOpen: boolean;
@@ -15,14 +16,19 @@ interface VoiceModalProps {
 }
 
 export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModalProps) {
+  const { user } = useAuth();
   const [mounted, setMounted] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [response, setResponse] = useState("");
+  const [chatInput, setChatInput] = useState("");
   const recognitionRef = useRef<any>(null);
   const synthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const lastSpokenRef = useRef("");
+  const manualProcessRef = useRef(false);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setMounted(true);
@@ -63,10 +69,31 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
 
   // Process transcript once listening stops
   useEffect(() => {
+    if (manualProcessRef.current) {
+      manualProcessRef.current = false;
+      return;
+    }
     if (!isListening && transcript && !isProcessing && !isSpeaking && !response) {
       handleProcessing(transcript);
     }
   }, [isListening, transcript]);
+
+  // Always speak latest model output when it arrives.
+  useEffect(() => {
+    const text = response.trim();
+    if (!text) return;
+    if (isProcessing || isListening) return;
+    if (lastSpokenRef.current === text) return;
+    lastSpokenRef.current = text;
+    speakResponse(text);
+  }, [response, isProcessing, isListening]);
+
+  // Keep transcript panel pinned to newest message.
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [transcript, response, isProcessing]);
 
   const handleProcessing = async (text: string) => {
     setIsProcessing(true);
@@ -74,24 +101,89 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
 
     try {
       const { twinApi } = await import("@/dib/api");
-      const userId = dataContext?.user_id ?? "unknown";
+      const userId =
+        dataContext?.user_id ||
+        dataContext?.userId ||
+        user?.id ||
+        "";
 
-      const data: any = await twinApi.chat(userId, {
-        message: text,
-        dataContext
+      if (!userId) {
+        throw new Error("No active user context found for twin chat.");
+      }
+
+      // Pull live backend context on every prompt so voice reasoning is dynamic.
+      const [twinState, twinHistory, twinTriggers, twinReport] = await Promise.all([
+        twinApi.get(userId).catch(() => null),
+        twinApi.getHistory(userId).catch(() => []),
+        twinApi.getTriggers(userId).catch(() => []),
+        twinApi.getReport(userId).catch(() => null),
+      ]);
+
+      // Fetch fresh score snapshot when GSTIN is available.
+      const gstin = dataContext?.gstin || user?.gstin || dataContext?.user_profile?.gstin;
+      let latestScore: any = null;
+      if (gstin) {
+        try {
+          const { scoreApi } = await import("@/dib/api");
+          const submit: any = await scoreApi.submit(String(gstin));
+          if (submit?.task_id) {
+            for (let i = 0; i < 3; i += 1) {
+              const snap: any = await scoreApi.get(submit.task_id).catch(() => null);
+              if (snap?.status === "complete") {
+                latestScore = snap;
+                break;
+              }
+              await new Promise((resolve) => setTimeout(resolve, 800));
+            }
+          }
+        } catch {
+          // Best-effort enrichment; fallback to available local context below.
+        }
+      }
+
+      const dynamicContext = {
+        ...(dataContext || {}),
+        user_profile: {
+          id: user?.id,
+          name: user?.name,
+          role: user?.role,
+          gstin: user?.gstin,
+        },
+        twin_state: twinState,
+        twin_history: Array.isArray(twinHistory) ? twinHistory.slice(0, 6) : twinHistory,
+        twin_triggers: Array.isArray(twinTriggers) ? twinTriggers.slice(0, 6) : twinTriggers,
+        twin_report: twinReport,
+        latest_score: latestScore || {
+          credit_score: dataContext?.credit_score,
+          risk_band: dataContext?.risk_band,
+          recommended_wc_amount: dataContext?.recommended_wc_amount,
+          recommended_term_amount: dataContext?.recommended_term_amount,
+          data_maturity_months: dataContext?.data_maturity_months,
+          top_reasons: dataContext?.top_reasons,
+        },
+      };
+
+      const res = await fetch("/api/twin-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          userId,
+          dataContext: dynamicContext,
+        }),
       });
+
+      const data: any = await res.json();
 
       setIsProcessing(false);
 
       const generatedResponse = data.reply || data.content || data.error || "Sorry, I am facing an issue right now connecting to the twin service.";
       setResponse(generatedResponse);
-      speakResponse(generatedResponse);
 
     } catch (err) {
       console.error(err);
       setIsProcessing(false);
       setResponse("An unexpected network error occurred.");
-      speakResponse("An unexpected network error occurred.");
     }
   };
 
@@ -135,6 +227,19 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
     }
   };
 
+  const submitTypedChat = async () => {
+    const text = chatInput.trim();
+    if (!text || isProcessing) return;
+    manualProcessRef.current = true;
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    }
+    setTranscript(text);
+    setChatInput("");
+    await handleProcessing(text);
+  };
+
   const handleClose = () => {
     if (recognitionRef.current) recognitionRef.current.stop();
     window.speechSynthesis?.cancel();
@@ -143,6 +248,7 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
     setIsSpeaking(false);
     setTranscript("");
     setResponse("");
+    lastSpokenRef.current = "";
     onClose();
   };
 
@@ -226,7 +332,11 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
               </div>
 
               {/* Chat / Transcript Area */}
-              <div className="w-full flex flex-col gap-3 h-[180px] overflow-y-auto pr-2" style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.1) transparent" }}>
+              <div
+                ref={chatScrollRef}
+                className="w-full flex flex-col gap-3 h-[180px] overflow-y-scroll overscroll-contain touch-pan-y pr-2 [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-white/25 hover:[&::-webkit-scrollbar-thumb]:bg-white/40"
+                style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.35) transparent", WebkitOverflowScrolling: "touch" }}
+              >
                 <AnimatePresence>
                   {transcript && (
                     <motion.div
@@ -260,19 +370,46 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
             </div>
 
             {/* Footer / Mic Button */}
-            <div className="mt-auto border-t border-white/5 bg-black/20 p-5 flex justify-center">
-              <button
-                onClick={toggleListening}
-                className={cn(
-                  "relative flex h-16 w-16 items-center justify-center rounded-full border transition-all duration-300 transform",
-                  isListening
-                    ? "border-red-500 bg-red-500/20 text-red-400 shadow-[0_0_30px_rgba(239,68,68,0.4)] scale-95"
-                    : "border-lime-500 bg-lime-500/20 text-lime-400 hover:bg-lime-500/30 hover:scale-105 shadow-[0_0_15px_rgba(163,230,53,0.15)]"
-                )}
-                title={isListening ? "Stop Listening" : "Start Listening"}
-              >
-                {isListening ? <MicOff className="h-7 w-7" /> : <Mic className="h-7 w-7" />}
-              </button>
+            <div className="mt-auto border-t border-white/5 bg-black/20 p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <input
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitTypedChat();
+                    }
+                  }}
+                  placeholder="Type to chat with your twin..."
+                  className="h-10 flex-1 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white outline-none focus:border-lime-400/60"
+                  disabled={isProcessing}
+                />
+                <button
+                  type="button"
+                  onClick={() => void submitTypedChat()}
+                  disabled={isProcessing || !chatInput.trim()}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-lime-500/50 bg-lime-500/20 text-lime-300 hover:bg-lime-500/30 disabled:opacity-50"
+                  title="Send message"
+                >
+                  <Send className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="flex justify-center">
+                <button
+                  onClick={toggleListening}
+                  className={cn(
+                    "relative flex h-14 w-14 items-center justify-center rounded-full border transition-all duration-300 transform",
+                    isListening
+                      ? "border-red-500 bg-red-500/20 text-red-400 shadow-[0_0_30px_rgba(239,68,68,0.4)] scale-95"
+                      : "border-lime-500 bg-lime-500/20 text-lime-400 hover:bg-lime-500/30 hover:scale-105 shadow-[0_0_15px_rgba(163,230,53,0.15)]"
+                  )}
+                  title={isListening ? "Stop Listening" : "Start Listening"}
+                >
+                  {isListening ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
+                </button>
+              </div>
             </div>
           </motion.div>
         </div>
