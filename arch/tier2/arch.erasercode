@@ -1,31 +1,39 @@
-title Tier 2 - Semantic Classification and Stream Enrichment
+title Tier 2 - Infra and Tool Architecture
 
 direction right
 
-Input [icon: inbox, color: teal] {
-  Raw Stream [icon: layers, label: "stream:raw_ingestion"]
+Runtime Infra [icon: server, color: teal] {
+  Redis XREADGROUP Worker [icon: radio, label: "cg_classifier consumer loop\nblock + ack"]
+  Canonical Event Parser [icon: file-text, label: "redis field coercion -> CanonicalEvent"]
 }
 
-Classifier [icon: cpu, color: purple] {
-  Rule Prefilter [icon: filter, label: "regex high-confidence mapping"]
-  MiniLM Encoder [icon: zap, label: "all-MiniLM-L6-v2\nanchor similarity"]
-  Category Mapper [icon: tag, label: "merchant_category -> transaction_type"]
+Classification Stack [icon: cpu, color: purple] {
+  Regex Rule Engine [icon: filter, label: "high-confidence merchant shortcuts"]
+  SentenceTransformers [icon: zap, label: "all-MiniLM-L6-v2 encoder"]
+  Cosine Similarity [icon: target, label: "anchor centroid scoring"]
+  LRU Embedding Cache [icon: clock, label: "@lru_cache merchant embeddings"]
+  Category-Type Mapper [icon: tag, label: "merchant_category -> transaction_type"]
 }
 
-Enrichment [icon: activity, color: orange] {
-  Anomaly Detector [icon: alert-triangle, label: "failed tx + z-score + velocity"]
-  Window Buffer [icon: clock, label: "7d/30d/90d per-user deques"]
+Behavioral Inline Analytics [icon: activity, color: orange] {
+  Z-Score Detector [icon: alert-triangle, label: "amount anomaly on rolling mean/std"]
+  Velocity Burst Detector [icon: bar-chart-2, label: ">5 events/hour detection"]
+  Deque Window Store [icon: database, label: "7d/30d/90d buffers + aggregates"]
 }
 
-Outputs [icon: send, color: green] {
-  Typed Stream [icon: layers, label: "stream:typed_events"]
-  Window Cache [icon: database, label: "twin:windows:{user_id}"]
+Output Infra [icon: send, color: green] {
+  Typed Stream Publisher [icon: layers, label: "stream:typed_events"]
+  Window KV Cache [icon: hard-drive, label: "twin:windows:{user_id}"]
 }
 
-Raw Stream --> Rule Prefilter: consume via group
-Rule Prefilter --> MiniLM Encoder: fallback path
-MiniLM Encoder --> Category Mapper: best category + confidence
-Category Mapper --> Anomaly Detector: enrich event
-Anomaly Detector --> Window Buffer: update windows
-Anomaly Detector --> Typed Stream: publish enriched event
-Window Buffer --> Window Cache: store summaries
+Redis XREADGROUP Worker --> Canonical Event Parser: ingest raw events
+Canonical Event Parser --> Regex Rule Engine: classify fast path
+Regex Rule Engine --> SentenceTransformers: fallback path
+SentenceTransformers --> LRU Embedding Cache: cached embedding lookup
+LRU Embedding Cache --> Cosine Similarity: score against anchors
+Cosine Similarity --> Category-Type Mapper: assign semantic tags
+Category-Type Mapper --> Z-Score Detector: enriched record
+Z-Score Detector --> Velocity Burst Detector: anomaly checks
+Velocity Burst Detector --> Deque Window Store: update user windows
+Velocity Burst Detector --> Typed Stream Publisher: emit typed event
+Deque Window Store --> Window KV Cache: write aggregate snapshots

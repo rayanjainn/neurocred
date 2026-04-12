@@ -1,49 +1,55 @@
-title Tier 6 - Predictive Simulation and Stress Engine
+title Tier 6 - Infra and Tool Architecture
 
 direction right
 
 Inputs [icon: inbox, color: teal] {
-  Twin Snapshot [icon: user, label: "income/expense/cash/risk/persona"]
+  Twin Snapshot [icon: user, label: "cash/income/expense/risk/persona state"]
   Scenario Spec [icon: list, label: "baseline/atomic/compound/cascading"]
+  Variance Reduction Flags [icon: settings, label: "sobol + antithetic"]
 }
 
-Simulation Core [icon: cpu, color: purple] {
-  Scenario Resolver [icon: settings, label: "day-level multipliers"]
-  Regime Engine [icon: shuffle, label: "state transitions"]
-  GARCH Volatility [icon: activity, label: "sigma path per day"]
-  Correlation Engine [icon: git-merge, label: "sobol + antithetic + copula"]
-  Cash Path Runner [icon: play, label: "N paths x H days"]
+Stochastic Engine [icon: cpu, color: purple] {
+  Scenario Resolver [icon: git-branch, label: "day-level multipliers from library"]
+  Regime Markov Engine [icon: shuffle, label: "state transitions STABLE/STRESSED/CRISIS"]
+  GARCH Volatility Generator [icon: activity, label: "sigma matrix per path/day"]
+  Correlated Shock Generator [icon: target, label: "copula/cholesky + sobol + antithetic"]
+  Cashflow Path Runner [icon: play, label: "N paths x H days"]
 }
 
 Risk Analytics [icon: bar-chart-2, color: orange] {
-  Cascade Tracker [icon: repeat, label: "EMI stress propagation"]
-  Tail Risk [icon: alert-triangle, label: "VaR/CVaR/default prob"]
-  EWS [icon: bell, label: "7d/14d/30d early warning"]
-  Fan Chart [icon: area-chart, label: "p10/p25/p50/p75/p90"]
-  Recovery Planner [icon: compass, label: "action search"]
+  Cascade Tracker [icon: repeat, label: "EMI miss propagation"]
+  Tail Risk Extractor [icon: alert-triangle, label: "default prob + VaR + CVaR"]
+  EWS Engine [icon: bell, label: "7d/14d/30d thresholds + severity"]
+  Fan Quantile Extractor [icon: area-chart, label: "p10/p25/p50/p75/p90"]
+  Temporal Projection [icon: clock, label: "day30/day60/day90 metrics"]
+  Recovery Planner [icon: compass, label: "search-based recovery steps"]
+  Counterfactual Runner [icon: refresh-cw, label: "optional alternative history"]
 }
 
-Outputs [icon: send, color: green] {
-  Sim Cache [icon: database, label: "sim:{user}:{sim_id}"]
+Output Infra [icon: send, color: green] {
+  Simulation Cache [icon: hard-drive, label: "sim:{user}:{sim_id}"]
   EWS Cache [icon: database, label: "sim:ews:{user}"]
   Fan Cache [icon: database, label: "sim:fan:{user}"]
-  Twin Projection [icon: user-check, label: "predicted_risk_trajectory\nlast_simulation_id"]
-  Event [icon: radio, label: "simulation_completed"]
+  Twin Projection Patch [icon: user-check, label: "predicted_risk_trajectory + sim refs"]
+  Completion Channel [icon: radio, label: "simulation_completed"]
 }
 
-Twin Snapshot --> Scenario Resolver: build run spec
-Scenario Spec --> Scenario Resolver: resolve components
-Scenario Resolver --> Regime Engine: path controls
-Regime Engine --> GARCH Volatility: sigma multipliers
-GARCH Volatility --> Correlation Engine: scale shocks
-Correlation Engine --> Cash Path Runner: evolve paths
-Cash Path Runner --> Cascade Tracker: due-day stress updates
-Cascade Tracker --> Tail Risk: aggregate losses
-Tail Risk --> EWS: warning probabilities
-Tail Risk --> Fan Chart: quantile trajectories
-EWS --> Recovery Planner: suggest interventions
-Tail Risk --> Sim Cache: persist full result
-EWS --> EWS Cache: persist snapshot
-Fan Chart --> Fan Cache: persist chart payload
-Sim Cache --> Twin Projection: patch twin fields
-Twin Projection --> Event: publish completion
+Twin Snapshot --> Scenario Resolver: build simulation request
+Scenario Spec --> Scenario Resolver: compose stress multipliers
+Variance Reduction Flags --> Correlated Shock Generator: configure generators
+Scenario Resolver --> Regime Markov Engine: initialize state transitions
+Regime Markov Engine --> GARCH Volatility Generator: regime-weighted sigma
+GARCH Volatility Generator --> Correlated Shock Generator: scale shocks
+Correlated Shock Generator --> Cashflow Path Runner: drive stochastic paths
+Cashflow Path Runner --> Cascade Tracker: due-day stress effects
+Cascade Tracker --> Tail Risk Extractor: aggregate path losses
+Tail Risk Extractor --> EWS Engine: warning probabilities
+Tail Risk Extractor --> Fan Quantile Extractor: quantile curves
+Tail Risk Extractor --> Temporal Projection: horizon summaries
+Temporal Projection --> Recovery Planner: recovery strategy search
+Tail Risk Extractor --> Counterfactual Runner: compare alternate actions
+Counterfactual Runner --> Simulation Cache: full result payload
+EWS Engine --> EWS Cache: latest warning snapshot
+Fan Quantile Extractor --> Fan Cache: dashboard fan data
+Simulation Cache --> Twin Projection Patch: write twin simulation fields
+Twin Projection Patch --> Completion Channel: publish simulation completion

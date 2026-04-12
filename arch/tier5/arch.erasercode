@@ -1,35 +1,45 @@
-title Tier 5 - Reasoning and Interrogation Engine
+title Tier 5 - Infra and Tool Architecture
 
 direction right
 
 Inputs [icon: inbox, color: teal] {
-  Features [icon: file-text, label: "Tier 3 behavioural vector"]
-  Twin Context [icon: user, label: "current + previous twin states"]
+  Tier 3 Feature Vector [icon: file-text, label: "current behavioural features"]
+  Tier 4 Twin Context [icon: user, label: "current + previous snapshots"]
+  Optional Events/Simulation [icon: layers, label: "recent typed events + sim hints"]
 }
 
-Reasoning Core [icon: cpu, color: purple] {
-  Contradiction Detector [icon: alert-circle, label: "layer1 z-test\nlayer2 source\nlayer3 LCI"]
-  Context Assembler [icon: layers, label: "priority + token budget"]
-  CoT Engine [icon: message-square, label: "structured JSON reasoning\nLLM with fallback"]
+Reasoning Pipeline [icon: cpu, color: purple] {
+  Contradiction Stats Engine [icon: bar-chart-2, label: "layer1 z-test\nlayer2 source consistency\nlayer3 LCI"]
+  Context Assembler [icon: filter, label: "priority packing + token budgeting"]
+  OpenRouter CoT Caller [icon: message-square, label: "structured JSON prompt/response"]
+  JSON Validator [icon: check-square, label: "Pydantic parse and schema checks"]
+  Deterministic Fallback [icon: shield, label: "threshold-based narrative/flags"]
 }
 
-Interrogation [icon: help-circle, color: orange] {
-  Trigger Gate [icon: git-merge, label: "low posterior / contradictions / shifts"]
-  Session Machine [icon: repeat, label: "rank questions\nparse answers\nbuild patches"]
+Interrogation Runtime [icon: repeat, color: orange] {
+  URS Ranker [icon: target, label: "uncertainty reduction score"]
+  Question Template Engine [icon: help-circle, label: "income/expense/commitment/assets/intent"]
+  Session State Machine [icon: git-merge, label: "IDLE..COMPLETE/ABANDONED"]
+  Answer Parser [icon: tool, label: "regex extraction + patch hints"]
 }
 
 Outputs [icon: send, color: green] {
-  Tier5 Result [icon: file-text, label: "narrative + flags + intents"]
-  Reasoning Stream [icon: layers, label: "stream:reasoning_events"]
-  Session Store [icon: database, label: "tier5:interrogation:{session_id}"]
+  Tier5 Result Cache [icon: hard-drive, label: "tier5:result:{user_id}"]
+  Reasoning Event Stream [icon: layers, label: "stream:reasoning_events"]
+  Interrogation Session Store [icon: database, label: "tier5:interrogation:{session_id}"]
 }
 
-Features --> Contradiction Detector: derive contradiction signal
-Twin Context --> Context Assembler: delta + recent state
-Contradiction Detector --> Context Assembler: layer outputs
-Context Assembler --> CoT Engine: structured prompt
-CoT Engine --> Trigger Gate: confidence + hypotheses
-Trigger Gate --> Session Machine: create/advance interrogation
-CoT Engine --> Tier5 Result: narrative/intents/flags
-Tier5 Result --> Reasoning Stream: emit reasoning_completed
-Session Machine --> Session Store: persist state machine
+Tier 3 Feature Vector --> Contradiction Stats Engine: compute contradiction signals
+Tier 4 Twin Context --> Context Assembler: delta packet context
+Contradiction Stats Engine --> Context Assembler: priority evidence
+Context Assembler --> OpenRouter CoT Caller: structured prompt
+OpenRouter CoT Caller --> JSON Validator: parse response
+JSON Validator --> Deterministic Fallback: failover path
+JSON Validator --> URS Ranker: confidence and hypotheses
+URS Ranker --> Question Template Engine: select top questions
+Question Template Engine --> Session State Machine: create session
+Session State Machine --> Answer Parser: parse user turns
+Answer Parser --> Interrogation Session Store: persist session updates
+Deterministic Fallback --> Tier5 Result Cache: cache latest result
+JSON Validator --> Tier5 Result Cache: cache latest result
+Tier5 Result Cache --> Reasoning Event Stream: emit completed/flagged events

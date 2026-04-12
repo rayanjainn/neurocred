@@ -1,33 +1,37 @@
-title Tier 4 - Stateful Digital Twin Core
+title Tier 4 - Infra and Tool Architecture
 
 direction right
 
-Input [icon: inbox, color: teal] {
-  Feature Vector [icon: file-text, label: "BehaviouralFeatureVector"]
+Input Contracts [icon: inbox, color: teal] {
+  BehaviouralFeatureVector [icon: file-text, label: "Tier 3 canonical feature schema"]
+  State Patch Requests [icon: edit, label: "reasoning/simulation/intervention patches"]
 }
 
-Twin Service [icon: cpu, color: purple] {
-  Metric Deriver [icon: activity, label: "risk/liquidity/stability/dependency"]
-  DNA Builder [icon: hash, label: "32-d deterministic embedding"]
-  Persona Inference [icon: user, label: "genuine/struggling/shell/paper/new"]
-  Avatar Deriver [icon: smile, label: "expression + mood"]
+Twin Derivation Stack [icon: cpu, color: purple] {
+  Metric Deriver [icon: activity, label: "risk/liquidity/stability/dependency formulas"]
+  DNA Projection Engine [icon: hash, label: "32-d deterministic projection\ninteraction terms + clipped ranges"]
+  Persona Rules [icon: user, label: "heuristic persona inference"]
+  Avatar Resolver [icon: smile, label: "expression/mood from state + flags"]
 }
 
-Persistence [icon: database, color: orange] {
-  Twin Store [icon: hard-drive, label: "twin:{user_id}"]
-  History Store [icon: archive, label: "twin:{user_id}:history"]
+State Infra [icon: database, color: orange] {
+  Redis Twin Key [icon: hard-drive, label: "twin:{user_id}"]
+  Redis History List [icon: archive, label: "twin:{user_id}:history"]
   Timeline Stream [icon: layers, label: "stream:twin_timeline"]
+  Materiality Gate [icon: git-merge, label: "version++ only on material field change"]
 }
 
-Events [icon: radio, color: green] {
-  Twin Updated [icon: bell, label: "pubsub: twin_updated"]
+Event Infra [icon: radio, color: green] {
+  PubSub Channel [icon: bell, label: "twin_updated"]
 }
 
-Feature Vector --> Metric Deriver: update_from_features
-Metric Deriver --> DNA Builder: embed signals
-DNA Builder --> Persona Inference: classify persona
-Persona Inference --> Avatar Deriver: set visual state
-Avatar Deriver --> Twin Store: save current
-Twin Store --> History Store: append snapshot when material
-Twin Store --> Timeline Stream: append timeline event
-Twin Store --> Twin Updated: publish state summary
+BehaviouralFeatureVector --> Metric Deriver: update_from_features
+State Patch Requests --> Materiality Gate: update_state_patch
+Metric Deriver --> DNA Projection Engine: embed financial dna
+DNA Projection Engine --> Persona Rules: classify persona
+Persona Rules --> Avatar Resolver: derive avatar state
+Avatar Resolver --> Materiality Gate: decide history write
+Materiality Gate --> Redis Twin Key: write current snapshot
+Materiality Gate --> Redis History List: append immutable snapshot
+Redis Twin Key --> Timeline Stream: append timeline event
+Redis Twin Key --> PubSub Channel: publish twin update summary

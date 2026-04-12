@@ -1,40 +1,49 @@
-title Tier 8 - Intervention, Negotiation, Dialogue, and Audit
+title Tier 8 - Infra and Tool Architecture
 
 direction right
 
-Inputs [icon: inbox, color: teal] {
-  Twin Updated Event [icon: radio, label: "pubsub: twin_updated"]
-  Twin State [icon: user, label: "current + history context"]
+Event Runtime [icon: server, color: teal] {
+  Intervention Orchestrator [icon: radio, label: "agent_orchestrator.py\nsubscribes twin_updated"]
+  Twin Service Reader [icon: user, label: "load current + short history"]
 }
 
-Intervention Core [icon: cpu, color: purple] {
-  Trigger Engine [icon: alert-circle, label: "liquidity/emi/overspend\nlifestyle/savings/fraud/new-credit"]
-  Relevance Scorer [icon: calculator, label: "urgency + personalization\nacceptance + safety"]
-  Notification Service [icon: send, label: "push/sms/whatsapp dispatch"]
+Decision Stack [icon: cpu, color: purple] {
+  Trigger Engine [icon: alert-circle, label: "liquidity/emi/overspend/lifestyle\nsavings/fraud/new-credit"]
+  Relevance Formula [icon: calculator, label: "0.4u + 0.3p + 0.2a + 0.1s"]
+  Consent Gate [icon: shield, label: "consent + threshold enforcement"]
+  Notification Router [icon: send, label: "channel mapping by priority"]
 }
 
-Negotiation [icon: message-square, color: orange] {
-  Offer Generator [icon: gift, label: "prequalified micro-loan"]
-  Session Engine [icon: repeat, label: "intent parse\nimpact simulation\nconfirm/reject"]
+Negotiation and Dialogue [icon: message-square, color: orange] {
+  Offer Generator [icon: gift, label: "prequalified amount + APR + tenure via cibil proxy"]
+  EMI Impact Simulator [icon: activity, label: "burden/buffer/risk projection"]
+  Intent Parser [icon: filter, label: "confirm/reject/lower-emi/extend/defer"]
+  Dialogue Manager [icon: bot, label: "intent-aware response templates\ncontext continuation"]
 }
 
-Dialogue and Reports [icon: file-text, color: green] {
-  Dialogue Manager [icon: bot, label: "intent-aware twin responses"]
-  Report Generator [icon: file, label: "daily/weekly summaries"]
-  Audit Logger [icon: shield, label: "append-only audit trail"]
+Audit and Delivery Infra [icon: database, color: green] {
+  Notification Stream [icon: layers, label: "stream:notifications"]
+  Negotiation Cache [icon: hard-drive, label: "tier8:negotiation:{session_id}"]
+  Offer Cache [icon: hard-drive, label: "tier8:offer:{user_id}"]
+  Audit ZSets [icon: archive, label: "audit:{user_id} + audit:all"]
+  Report Formatter [icon: file-text, label: "daily/weekly whatsapp/sms text"]
 }
 
-Twin Updated Event --> Trigger Engine: react to state change
-Twin State --> Trigger Engine: evaluate thresholds
-Trigger Engine --> Relevance Scorer: compute relevance
-Relevance Scorer --> Notification Service: send when allowed
-Trigger Engine --> Offer Generator: build proactive offer
-Offer Generator --> Session Engine: start negotiation
-Session Engine --> Twin State: apply confirmed patch
-Twin State --> Dialogue Manager: respond with context
-Twin State --> Report Generator: generate summaries
-Trigger Engine --> Audit Logger: log trigger
-Notification Service --> Audit Logger: log send event
-Session Engine --> Audit Logger: log negotiation events
-Dialogue Manager --> Audit Logger: log chat interactions
-Report Generator --> Audit Logger: log report generation
+Intervention Orchestrator --> Twin Service Reader: event-driven twin fetch
+Twin Service Reader --> Trigger Engine: evaluate thresholds
+Trigger Engine --> Relevance Formula: score each trigger
+Relevance Formula --> Consent Gate: enforce send policy
+Consent Gate --> Notification Router: dispatch allowed notifications
+Trigger Engine --> Offer Generator: create proactive offer
+Offer Generator --> EMI Impact Simulator: simulate restructuring options
+EMI Impact Simulator --> Intent Parser: advance session turn
+Intent Parser --> Negotiation Cache: persist session state
+Twin Service Reader --> Dialogue Manager: provide chat context
+Dialogue Manager --> Report Formatter: compose human-readable summaries
+Notification Router --> Notification Stream: log outbound notifications
+Offer Generator --> Offer Cache: store generated offer
+Trigger Engine --> Audit ZSets: log trigger events
+Notification Router --> Audit ZSets: log send events
+Intent Parser --> Audit ZSets: log negotiation events
+Dialogue Manager --> Audit ZSets: log chat events
+Report Formatter --> Audit ZSets: log report generation
