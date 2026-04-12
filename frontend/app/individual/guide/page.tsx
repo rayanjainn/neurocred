@@ -33,14 +33,14 @@ import { msmeApi } from "@/dib/api";
 const LANGUAGES = ["English", "Hindi", "Marathi", "Tamil", "Telugu", "Kannada"];
 const USE_MOCK = process.env.NEXT_PUBLIC_USE_MOCK !== "false";
 
-export default function MsmeGuidePage() {
+export default function IndividualGuidePage() {
   const { user } = useAuth();
   const router = useRouter();
   const [messages, setMessages] = useState([
     {
       role: "assistant",
       content:
-        "Namaste! I'm your MSME Credit Assistant. How can I help you today? You can ask about your credit score, GST filing, loan products, or schemes like CGTMSE and MUDRA.",
+        "Namaste! I'm your Personal Finance & Credit Assistant. How can I help you today? You can ask about your personal credit score, twin stability, and personal loan health.",
       timestamp: new Date().toISOString(),
     },
   ]);
@@ -74,12 +74,12 @@ export default function MsmeGuidePage() {
   }, [messages]);
 
   useEffect(() => {
-    if (!user || user.role !== "msme") {
+    if (!user || user.role !== "individual") {
       router.push("/unauthorized");
     }
   }, [user, router]);
 
-  if (!user || user.role !== "msme") {
+  if (!user || user.role !== "individual") {
     return null;
   }
 
