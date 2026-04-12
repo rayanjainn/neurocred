@@ -36,7 +36,7 @@ import { ProcessingWorkflow } from "@/components/ProcessingWorkflow";
 
 export default function MsmeDashboard() {
   const containerRef = useRef<HTMLDivElement>(null);
-  
+
   const { user } = useAuth();
   const router = useRouter();
   const { score, status, refresh } = useScore(user?.gstin);
@@ -44,15 +44,15 @@ export default function MsmeDashboard() {
 
   useGSAP(() => {
     if (!containerRef.current) return;
-    gsap.fromTo(".gsap-card", 
-      { opacity: 0, y: 30, scale: 0.98 }, 
+    gsap.fromTo(".gsap-card",
+      { opacity: 0, y: 30, scale: 0.98 },
       { opacity: 1, y: 0, scale: 1, duration: 0.6, stagger: 0.08, ease: "power3.out", delay: 0.1 }
     );
   }, { scope: containerRef, dependencies: [status] });
 
   useEffect(() => {
     if (!user?.gstin) return;
-    loanApi.list({ gstin: user.gstin }).then(setLoans).catch(() => {});
+    loanApi.list({ gstin: user.gstin }).then(setLoans).catch(() => { });
   }, [user?.gstin]);
 
   useEffect(() => {
@@ -79,25 +79,27 @@ export default function MsmeDashboard() {
           description={`GSTIN: ${user.gstin} · Running autonomous credit pipeline`}
         />
         <div className="flex-1 flex flex-col items-center justify-center">
-            <div className="w-full max-w-xl p-8 rounded-3xl border bg-card/50 backdrop-blur-xl shadow-2xl relative overflow-hidden gsap-card">
-                <div className="absolute top-0 left-0 w-full h-1 bg-muted">
-                    <div className="h-full bg-primary transition-all duration-500" style={{ width: (
-                        status === "ingesting" ? "20%" :
-                        status === "classifying" ? "40%" :
-                        status === "extracting_features" ? "60%" :
+          <div className="w-full max-w-xl p-8 rounded-3xl border bg-card/50 backdrop-blur-xl shadow-2xl relative overflow-hidden gsap-card">
+            <div className="absolute top-0 left-0 w-full h-1 bg-muted">
+              <div className="h-full bg-primary transition-all duration-500" style={{
+                width: (
+                  status === "ingesting" ? "20%" :
+                    status === "classifying" ? "40%" :
+                      status === "extracting_features" ? "60%" :
                         status === "benchmarking" ? "80%" :
-                        status === "scoring" ? "95%" : "5%"
-                    ) }} />
-                </div>
-                <h3 className="text-xl font-bold mb-8 flex items-center gap-3">
-                    <Shield className="w-6 h-6 text-primary" />
-                    Calculating Credit Score
-                </h3>
-                <ProcessingWorkflow currentStatus={status} />
+                          status === "scoring" ? "95%" : "5%"
+                )
+              }} />
             </div>
-            <p className="mt-8 text-sm text-muted-foreground animate-pulse tracking-wide uppercase">
-                Airavat Tier 4 Cognitive Engine Active
-            </p>
+            <h3 className="text-xl font-bold mb-8 flex items-center gap-3">
+              <Shield className="w-6 h-6 text-primary" />
+              Calculating Credit Score
+            </h3>
+            <ProcessingWorkflow currentStatus={status} />
+          </div>
+          <p className="mt-8 text-sm text-muted-foreground animate-pulse tracking-wide uppercase">
+            Airavat Tier 4 Cognitive Engine Active
+          </p>
         </div>
       </div>
     );
@@ -195,20 +197,20 @@ export default function MsmeDashboard() {
                 {(score.top_reasons || [])
                   .filter((r: string) => !r.startsWith("Path to Prime"))
                   .map((reason: string, i: number) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-sm text-foreground"
-                  >
-                    <span className="w-5 h-5 rounded-full bg-accent text-primary text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
-                      {i + 1}
-                    </span>
-                    {reason}
-                  </li>
-                ))}
+                    <li
+                      key={i}
+                      className="flex items-start gap-2 text-sm text-foreground"
+                    >
+                      <span className="w-5 h-5 rounded-full bg-accent text-primary text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
+                        {i + 1}
+                      </span>
+                      {reason}
+                    </li>
+                  ))}
               </ul>
             </CardContent>
           </Card>
-          
+
           <div className="gsap-card opacity-0 h-full">
             <VigilanceReasoningCard userId={user.gstin ?? user.id} />
           </div>
@@ -298,7 +300,7 @@ export default function MsmeDashboard() {
             <StatCard
               label="Category"
               value={
-                score.msme_category 
+                score.msme_category
                   ? score.msme_category.charAt(0).toUpperCase() + score.msme_category.slice(1)
                   : "Individual"
               }

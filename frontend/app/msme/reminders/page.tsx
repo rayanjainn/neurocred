@@ -12,6 +12,8 @@ import {
   AlertTriangle,
   Clock,
   IndianRupee,
+  MessageCircle,
+  Loader2,
 } from "lucide-react";
 import { cn } from "@/dib/utils";
 
@@ -21,11 +23,14 @@ function fmtDate(d: string) {
   });
 }
 
+type WaStatus = "idle" | "sending" | "sent" | "error";
+
 export default function MsmeRemindersPage() {
   const { user } = useAuth();
   const router = useRouter();
   const [reminders, setReminders] = useState<any[]>([]);
   const [view, setView] = useState<"all" | "gst_filing" | "installment_payment">("all");
+  const [waStatus, setWaStatus] = useState<WaStatus>("idle");
 
   const gstin = user?.gstin;
 
@@ -66,6 +71,24 @@ export default function MsmeRemindersPage() {
     } catch {}
   };
 
+  const sendWhatsAppAlert = async () => {
+    setWaStatus("sending");
+    try {
+      const res = await fetch("/api/whatsapp-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Send the full reminders array — route.ts handles all parsing
+        body: JSON.stringify({ reminders }),
+      });
+      if (!res.ok) throw new Error("failed");
+      setWaStatus("sent");
+      setTimeout(() => setWaStatus("idle"), 4000);
+    } catch {
+      setWaStatus("error");
+      setTimeout(() => setWaStatus("idle"), 4000);
+    }
+  };
+
   const overdue = reminders.filter((r: any) => r.status === "overdue");
   const due = reminders.filter((r: any) => r.status === "due");
   const upcoming = reminders.filter((r: any) => r.status === "upcoming");
@@ -81,10 +104,32 @@ export default function MsmeRemindersPage() {
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
-      <PageHeader
-        title="Reminders"
-        description="FY 2025–26 · GST filing deadlines and loan installments"
-      />
+      <div className="flex items-start justify-between gap-4 mb-2">
+        <PageHeader
+          title="Reminders"
+          description="FY 2025–26 · GST filing deadlines and loan installments"
+        />
+        <Button
+          onClick={sendWhatsAppAlert}
+          disabled={waStatus === "sending"}
+          size="sm"
+          className={cn(
+            "shrink-0 gap-2 text-xs font-semibold transition-all",
+            waStatus === "sent" && "bg-emerald-600 hover:bg-emerald-700 text-white",
+            waStatus === "error" && "bg-red-600 hover:bg-red-700 text-white",
+          )}
+        >
+          {waStatus === "sending" ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <MessageCircle className="w-3.5 h-3.5" />
+          )}
+          {waStatus === "idle" && "Trigger WhatsApp Alert"}
+          {waStatus === "sending" && "Sending…"}
+          {waStatus === "sent" && "✓ Alert Sent"}
+          {waStatus === "error" && "✗ Failed – Retry"}
+        </Button>
+      </div>
 
       <div className="grid grid-cols-4 gap-3 mb-5">
         {[
