@@ -47,6 +47,42 @@ interface Details {
   recent_ewb: any[];
 }
 
+function percentile(values: number[], q: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * q)));
+  return sorted[idx] ?? 0;
+}
+
+function buildTrendTimeline(
+  points: TimelinePoint[],
+  valueKey: "daily_volume" | "daily_ewb_volume",
+) {
+  const raw = points.map((p) => Number((p as any)[valueKey] ?? 0));
+  const positive = raw.filter((v) => v > 0);
+  const cap = Math.max(1, percentile(positive, 0.9));
+  const smoothWindow = 3;
+
+  return points.map((p, i) => {
+    const value = Number((p as any)[valueKey] ?? 0);
+    const clipped = Math.min(value, cap);
+    let sum = 0;
+    let count = 0;
+    for (let j = Math.max(0, i - smoothWindow + 1); j <= i; j += 1) {
+      const sample = Math.min(Number((points[j] as any)?.[valueKey] ?? 0), cap);
+      sum += sample;
+      count += 1;
+    }
+
+    return {
+      ...p,
+      shortDate: (p.date || "").slice(0, 10),
+      rawValue: value,
+      trendValue: count > 0 ? sum / count : clipped,
+    };
+  });
+}
+
 export default function DataExplorerPage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -104,6 +140,13 @@ export default function DataExplorerPage() {
     if(type.includes("SHELL") || type.includes("FRAUD")) return "bg-rose-500/10 text-rose-500 border-rose-500/20";
     return "bg-slate-500/10 text-slate-500 border-slate-500/20";
   };
+
+  const upiTrendTimeline = details
+    ? buildTrendTimeline(details.upi_timeline || [], "daily_volume")
+    : [];
+  const ewbTrendTimeline = details
+    ? buildTrendTimeline(details.ewb_timeline || [], "daily_ewb_volume")
+    : [];
 
   return (
     <div ref={containerRef} className="p-6 md:p-8 max-w-[1400px] mx-auto min-h-screen space-y-8 relative overflow-hidden">
@@ -283,9 +326,9 @@ export default function DataExplorerPage() {
                         {details.upi_timeline.length === 0 ? (
                            <div className="h-full flex items-center justify-center text-muted-foreground bg-muted/20 rounded-2xl border border-dashed border-border italic">No UPI Activity Node Detected</div>
                         ) : (
-                          <div style={{ width: "100%", height: 300 }}>
+                          <div style={{ width: "100%", height: 340 }}>
                           <ResponsiveContainer width="100%" height="100%">
-                            <AreaChart data={details.upi_timeline} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                            <AreaChart data={upiTrendTimeline} margin={{ top: 10, right: 12, left: 4, bottom: 8 }}>
                               <defs>
                                 <linearGradient id="colorUpi" x1="0" y1="0" x2="0" y2="1">
                                   <stop offset="5%" stopColor="#6366f1" stopOpacity={0.4}/>
@@ -293,21 +336,23 @@ export default function DataExplorerPage() {
                                 </linearGradient>
                               </defs>
                               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.1} />
-                              <XAxis dataKey="date" tick={{fontSize: 10}} tickMargin={10} minTickGap={30} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.5} axisLine={false} />
-                              <YAxis tickFormatter={(val) => `₹${(val/1000).toFixed(0)}k`} width={60} tick={{fontSize: 10}} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.5} axisLine={false} />
+                              <XAxis dataKey="shortDate" tick={{ fontSize: 10, fill: "#ffffff" }} tickMargin={10} minTickGap={36} stroke="rgba(255,255,255,0.55)" axisLine={false} />
+                              <YAxis tickFormatter={(val) => `₹${(val/1000).toFixed(0)}k`} width={62} tick={{ fontSize: 10, fill: "#ffffff" }} stroke="rgba(255,255,255,0.55)" axisLine={false} />
                               <Tooltip 
                                 cursor={{ stroke: '#6366f1', strokeWidth: 2 }}
-                                formatter={(val: number) => [`₹${val.toLocaleString()}`, "Volume"]}
+                                formatter={(val: number, name) => [`₹${Math.round(val).toLocaleString()}`, name === "rawValue" ? "Raw Volume" : "Trend Volume"]}
                                 contentStyle={{ 
-                                  backgroundColor: 'rgba(var(--background), 0.8)', 
+                                  backgroundColor: 'rgba(12, 16, 24, 0.92)', 
                                   backdropFilter: 'blur(12px)',
                                   borderRadius: '20px', 
-                                  border: '1px solid hsl(var(--border))', 
+                                  border: '1px solid rgba(255,255,255,0.12)', 
                                   boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)',
+                                  color: '#ffffff',
                                   padding: '12px'
                                 }}
                               />
-                              <Area type="monotone" dataKey="daily_volume" stroke="#6366f1" strokeWidth={4} fillOpacity={1} fill="url(#colorUpi)" animationDuration={1500} />
+                              <Area type="monotone" dataKey="rawValue" stroke="#818cf8" strokeWidth={1.2} fillOpacity={0.25} fill="url(#colorUpi)" animationDuration={1500} />
+                              <Line type="monotone" dataKey="trendValue" stroke="#a5b4fc" strokeWidth={3} dot={false} name="Trend" />
                             </AreaChart>
                           </ResponsiveContainer>
                           </div>
@@ -324,24 +369,26 @@ export default function DataExplorerPage() {
                         {details.ewb_timeline.length === 0 ? (
                            <div className="h-full flex items-center justify-center text-muted-foreground bg-muted/20 rounded-2xl border border-dashed border-border italic">No E-Way Bill Logs Found</div>
                         ) : (
-                          <div style={{ width: "100%", height: 300 }}>
+                          <div style={{ width: "100%", height: 340 }}>
                           <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={details.ewb_timeline} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                            <LineChart data={ewbTrendTimeline} margin={{ top: 10, right: 12, left: 4, bottom: 8 }}>
                               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.1} />
-                              <XAxis dataKey="date" tick={{fontSize: 10}} tickMargin={10} minTickGap={30} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.5} axisLine={false} />
-                              <YAxis tickFormatter={(val) => `₹${(val/1000).toFixed(0)}k`} width={60} tick={{fontSize: 10}} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.5} axisLine={false} />
+                              <XAxis dataKey="shortDate" tick={{ fontSize: 10, fill: "#ffffff" }} tickMargin={10} minTickGap={36} stroke="rgba(255,255,255,0.55)" axisLine={false} />
+                              <YAxis tickFormatter={(val) => `₹${(val/1000).toFixed(0)}k`} width={62} tick={{ fontSize: 10, fill: "#ffffff" }} stroke="rgba(255,255,255,0.55)" axisLine={false} />
                               <Tooltip 
                                 cursor={{ stroke: '#f59e0b', strokeWidth: 2 }}
-                                formatter={(val: number) => [`₹${val.toLocaleString()}`, "Logistics Value"]}
+                                formatter={(val: number, name) => [`₹${Math.round(val).toLocaleString()}`, name === "rawValue" ? "Raw Logistics Value" : "Trend Logistics Value"]}
                                 contentStyle={{ 
-                                  backgroundColor: 'rgba(var(--background), 0.8)', 
+                                  backgroundColor: 'rgba(12, 16, 24, 0.92)', 
                                   backdropFilter: 'blur(12px)',
                                   borderRadius: '20px', 
-                                  border: '1px solid hsl(var(--border))', 
+                                  border: '1px solid rgba(255,255,255,0.12)', 
+                                  color: '#ffffff',
                                   padding: '12px'
                                 }}
                               />
-                              <Line type="stepAfter" dataKey="daily_ewb_volume" stroke="#f59e0b" strokeWidth={4} dot={false} animationDuration={1500} />
+                              <Line type="stepAfter" dataKey="rawValue" stroke="#f59e0b" strokeOpacity={0.45} strokeWidth={2} dot={false} name="Raw" animationDuration={1500} />
+                              <Line type="monotone" dataKey="trendValue" stroke="#fbbf24" strokeWidth={3} dot={false} name="Trend" />
                             </LineChart>
                           </ResponsiveContainer>
                           </div>

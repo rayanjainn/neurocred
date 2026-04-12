@@ -64,9 +64,19 @@ const FIELD_TIPS: Record<string, string> = {
     "MUDRA scheme for micro enterprises needing loans up to ₹10L.",
 };
 
+const SHAP_FEATURE_WHITELIST = [
+  "gst_filing_compliance_rate",
+  "months_active_gst",
+  "statutory_payment_regularity_score",
+  "hsn_entropy_90d",
+  "gst_30d_value",
+  "ewb_30d_value",
+] as const;
+
 export default function MsmeScoreReport() {
   const { user } = useAuth();
   const router = useRouter();
+  const twinUserId = user?.gstin ?? user?.id ?? "";
   const { score, status, refresh } = useScore(user?.gstin);
   const [chatMessages, setChatMessages] = useState<any[]>([
     {
@@ -177,7 +187,13 @@ export default function MsmeScoreReport() {
     );
   }
 
-  const shap = score.shap_waterfall ?? [];
+  const shap = (score.shap_waterfall ?? [])
+    .filter((s: any) => SHAP_FEATURE_WHITELIST.includes(s.feature_name))
+    .sort(
+      (a: any, b: any) =>
+        SHAP_FEATURE_WHITELIST.indexOf(a.feature_name) -
+        SHAP_FEATURE_WHITELIST.indexOf(b.feature_name),
+    );
   const maxShap =
     shap.length > 0 ? Math.max(...shap.map((s) => s.abs_magnitude)) : 1;
 
@@ -444,10 +460,10 @@ export default function MsmeScoreReport() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
           <div className="md:col-span-2">
-            <VigilanceReasoningCard userId={user.id} />
+            <VigilanceReasoningCard userId={twinUserId} />
           </div>
           <div className="md:col-span-1">
-            <AnomalyMetricsCard userId={user.id} />
+            <AnomalyMetricsCard userId={twinUserId} />
           </div>
         </div>
       </div>
