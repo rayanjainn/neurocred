@@ -75,10 +75,10 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
     try {
       const { twinApi } = await import("@/dib/api");
       const userId = dataContext?.user_id ?? "unknown";
-      
-      const data: any = await twinApi.chat(userId, { 
-        message: text, 
-        dataContext 
+
+      const data: any = await twinApi.chat(userId, {
+        message: text,
+        dataContext
       });
 
       setIsProcessing(false);
@@ -97,10 +97,10 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
 
   const speakResponse = (text: string) => {
     if (!window.speechSynthesis) return;
-    
+
     setIsSpeaking(true);
     window.speechSynthesis.cancel(); // Cancel any ongoing speech
-    
+
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = "en-IN";
     utterance.rate = 1.0;
@@ -174,12 +174,12 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
             {/* Header */}
             <div className="flex items-center justify-between border-b border-white/10 p-4">
               <div className="flex flex-col">
-                 <div className="flex items-center gap-2">
-                    <div className={cn("h-2 w-2 rounded-full", isSpeaking || isListening ? "animate-pulse bg-lime-400" : "bg-white/30")} />
-                    <span className="text-sm font-semibold tracking-wide text-foreground">
+                <div className="flex items-center gap-2">
+                  <div className={cn("h-2 w-2 rounded-full", isSpeaking || isListening ? "animate-pulse bg-lime-400" : "bg-white/30")} />
+                  <span className="text-sm font-semibold tracking-wide text-foreground">
                     Digital Twin: {twinName}
-                    </span>
-                 </div>
+                  </span>
+                </div>
               </div>
               <button
                 onClick={handleClose}
@@ -192,16 +192,16 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
 
             {/* Body */}
             <div className="p-6 flex flex-col items-center gap-6">
-              
+
               {/* Avatar Aura container */}
               <div className="relative flex justify-center py-2 h-32 items-center">
-                <TwinEnergyAura 
-                  avatarLabel={twinName.charAt(0)} 
+                <TwinEnergyAura
+                  avatarLabel={twinName.charAt(0)}
                   className={cn(
                     "transition-all duration-500 ease-out",
                     isSpeaking ? "scale-[1.15] ring-lime-400/80 shadow-[0_0_50px_rgba(163,230,53,0.5)]" : "ring-lime-400/40",
                     isListening ? "scale-105 ring-lime-400" : ""
-                  )} 
+                  )}
                 />
               </div>
 
@@ -215,9 +215,9 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
                     exit={{ opacity: 0, y: -5 }}
                     className={cn(
                       "text-sm font-medium absolute inset-x-0",
-                      isListening ? "text-lime-400 animate-pulse" : 
-                      isProcessing ? "text-amber-400" : 
-                      isSpeaking ? "text-lime-300" : "text-muted-foreground"
+                      isListening ? "text-lime-400 animate-pulse" :
+                        isProcessing ? "text-amber-400" :
+                          isSpeaking ? "text-lime-300" : "text-muted-foreground"
                     )}
                   >
                     {statusText}
@@ -229,7 +229,7 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
               <div className="w-full flex flex-col gap-3 h-[180px] overflow-y-auto pr-2" style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.1) transparent" }}>
                 <AnimatePresence>
                   {transcript && (
-                    <motion.div 
+                    <motion.div
                       key="transcript"
                       initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
                       className="self-end max-w-[85%] rounded-2xl rounded-tr-sm bg-lime-900/40 border border-lime-800/50 p-3 text-sm text-lime-50"
@@ -238,16 +238,16 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
                     </motion.div>
                   )}
                   {isProcessing && !response && (
-                     <motion.div 
-                        key="processing"
-                        initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}
-                        className="self-start max-w-[85%] rounded-2xl rounded-tl-sm bg-white/5 border border-white/10 p-3 text-sm text-muted-foreground flex items-center gap-2"
-                     >
-                       <Loader2 className="h-4 w-4 animate-spin text-lime-500" /> Thinking...
-                     </motion.div>
+                    <motion.div
+                      key="processing"
+                      initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }}
+                      className="self-start max-w-[85%] rounded-2xl rounded-tl-sm bg-white/5 border border-white/10 p-3 text-sm text-muted-foreground flex items-center gap-2"
+                    >
+                      <Loader2 className="h-4 w-4 animate-spin text-lime-500" /> Thinking...
+                    </motion.div>
                   )}
                   {response && (
-                    <motion.div 
+                    <motion.div
                       key="response"
                       initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
                       className="self-start max-w-[85%] rounded-2xl rounded-tl-sm bg-[#151a16] border border-lime-900/40 p-3 text-sm text-foreground shadow-lg"
@@ -265,8 +265,8 @@ export function VoiceModal({ isOpen, onClose, twinName, dataContext }: VoiceModa
                 onClick={toggleListening}
                 className={cn(
                   "relative flex h-16 w-16 items-center justify-center rounded-full border transition-all duration-300 transform",
-                  isListening 
-                    ? "border-red-500 bg-red-500/20 text-red-400 shadow-[0_0_30px_rgba(239,68,68,0.4)] scale-95" 
+                  isListening
+                    ? "border-red-500 bg-red-500/20 text-red-400 shadow-[0_0_30px_rgba(239,68,68,0.4)] scale-95"
                     : "border-lime-500 bg-lime-500/20 text-lime-400 hover:bg-lime-500/30 hover:scale-105 shadow-[0_0_15px_rgba(163,230,53,0.15)]"
                 )}
                 title={isListening ? "Stop Listening" : "Start Listening"}
