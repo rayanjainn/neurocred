@@ -2828,6 +2828,18 @@ async def get_individual_score(user_id: str, request: Request) -> dict[str, Any]
         "upi_transaction_count_30d": int(_to_float(feat_row.get("upi_transaction_count_30d"), upi_txn_count_30d)),
         "debit_credit_ratio": round(debit_credit_ratio, 4),
         "credit_card_utilisation_pct": round(credit_utilisation, 2),
+        "top_reasons": [
+            "Strong liquidity with over 15 days of cash buffer." if comp_liquidity > 0.6 else "Maintaining a larger cash buffer could further improve resilience.",
+            "High network trust score with no deceptive patterns detected." if comp_network > 0.85 else "Strengthening counterparty trust networks would benefit your profile.",
+            "Stable income profile over the last 6 months." if income_trend == "stable" or income_trend == "rising" else "Increasing income stability would positively impact your health score.",
+        ],
+        "shap_waterfall": [
+            {"feature": "Credit Strength", "abs_magnitude": weights["credit"] * comp_credit, "sign": 1},
+            {"feature": "Liquidity", "abs_magnitude": weights["liquidity"] * comp_liquidity, "sign": 1},
+            {"feature": "Stability", "abs_magnitude": weights["stability"] * comp_stability, "sign": 1},
+            {"feature": "Behavior", "abs_magnitude": weights["behavior"] * comp_behavior, "sign": 1},
+            {"feature": "Network", "abs_magnitude": weights["network"] * comp_network, "sign": 1},
+        ],
         "top_spending_categories": top_spending_categories,
         "income_trend": income_trend,
         "insights": insights,
