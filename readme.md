@@ -1,6 +1,6 @@
 <div align="center">
 
-# FinTwin
+# NeuroCred
 
 **A cognitive digital twin & credit engine for Indian MSMEs**
 
@@ -15,7 +15,7 @@
 
 ---
 
-Traditional credit scoring looks backward. FinTwin looks forward.
+Traditional credit scoring looks backward. NeuroCred looks forward.
 
 It builds a **live, versioned digital twin** of a business from raw transactional signals — UPI logs, bank feeds, SMS alerts, EMI records — and runs a cognitive credit engine on top of it. Monte Carlo simulations, LLM narrative reasoning, anomaly detection, and autonomous interventions all working together, in real time.
 
@@ -108,6 +108,6 @@ All technical deep-dives live in [`/docs`](docs/):
 
 <div align="center">
 
-**FinTwin** — because your credit score shouldn't be a rearview mirror.
+**NeuroCred** — because your credit score shouldn't be a rearview mirror.
 
 </div>
