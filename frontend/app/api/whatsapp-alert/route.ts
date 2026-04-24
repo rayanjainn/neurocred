@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const WA_PHONE_ID = "***REMOVED***";
-const WA_TOKEN =
-  "***REMOVED***";
-const RECIPIENT = "***REMOVED***"; // Must be a verified test recipient in Meta Developer Console
+const WA_PHONE_ID = process.env.WA_PHONE_ID!;
+const WA_TOKEN = process.env.WA_TOKEN!;
+const RECIPIENT = process.env.WA_RECIPIENT!;
 
 // Priority order for sorting — lower number = higher priority
 const STATUS_PRIORITY: Record<string, number> = {
@@ -58,13 +57,13 @@ function buildAlertMessage(reminders: any[]): string {
       : `✅ *No immediate action required.*\n\n`;
 
   return (
-    `${headerEmoji} *FinTwin Alert - ${headline}*\n\n` +
+    `${headerEmoji} *NeuroCred Alert - ${headline}*\n\n` +
     `📊 *Your Reminder Summary*\n` +
     `🔴 Overdue:  *${overdue.length}*\n` +
     `🟡 Due Soon: *${due.length}*\n` +
     `🔵 Upcoming: *${upcoming.length}*\n\n` +
     topSection +
-    `_Log in to FinTwin to take action and avoid penalties._`
+    `_Log in to NeuroCred to take action and avoid penalties._`
   );
 }
 
