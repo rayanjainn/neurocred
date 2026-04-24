@@ -1,155 +1,113 @@
-# fintwin  |  the cognitive digital twin & credit engine
+<div align="center">
 
-> a stateful, event-driven financial intelligence platform that builds a versioned "digital twin" of a business using multi-source signals (gst, upi, sms, emi) to drive cognitive credit decisions and proactive financial interventions.
+# FinTwin
 
-![FinTwin Teaser](assets/architecture.png)
+**A cognitive digital twin & credit engine for Indian MSMEs**
 
-## 1. system architecture (technical)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000?style=flat-square&logo=nextdotjs)](https://nextjs.org)
+[![Redis](https://img.shields.io/badge/Redis-Streams-DC382D?style=flat-square&logo=redis&logoColor=white)](https://redis.io)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-the platform implements a **ten-tier asynchronous pipeline** that transforms raw transactional telemetry into stateful business intelligence.
+*Built at Airavat Hackathon · Team Pookies*
 
-```mermaid
-graph LR
-    %% Data Source Components
-    subgraph Ingestion ["<b>TIER 1: MULTI-SOURCE INGESTION</b>"]
-        direction TB
-        A1["Bank APIs"]
-        A2["UPI Logs"]
-        A3["SMS Alerts"]
-        A4["EMI Records"]
-    end
+</div>
 
-    %% Bus Component
-    subgraph Bus ["<b>TIER 1/2: EVENT BUS</b>"]
-        B[("Redis Streams")]
-    end
+---
 
-    %% Processing Block
-    subgraph TwinEngine ["<b>TIER 2-4: TWIN ENGINE</b>"]
-        direction TB
-        C1["Event Classifier"]
-        C2["Feature Extractor"]
-        C3[("Digital Twin State")]
-    end
+Traditional credit scoring looks backward. FinTwin looks forward.
 
-    %% Analysis Block
-    subgraph Analysis ["<b>TIER 5-9: COGNITIVE ANALYSIS</b>"]
-        direction TB
-        D1["LLM Reasoner"]
-        D2["Risk Simulator"]
-        D3["Anomaly Detector"]
-    end
+It builds a **live, versioned digital twin** of a business from raw transactional signals — UPI logs, bank feeds, SMS alerts, EMI records — and runs a cognitive credit engine on top of it. Monte Carlo simulations, LLM narrative reasoning, anomaly detection, and autonomous interventions all working together, in real time.
 
-    %% Output
-    subgraph Decision ["<b>TIER 7-10: ACTION & AUDIT</b>"]
-        direction TB
-        E1{"Cognitive Engine"}
-        E2["Intervention Agent"]
-        E3["Live Dashboard"]
-    end
+---
 
-    %% Connections
-    Ingestion --> Bus
-    Bus --> C1
-    C1 --> C2
-    C2 --> C3
-    C3 --> Analysis
-    D1 & D2 & D3 --> E1
-    E1 --> E2
-    E2 --> E3
-    Analysis --> E3
+## Architecture
 
-    %% Styling
-    style TwinEngine fill:#e3f2fd,stroke:#1e88e5,stroke-width:2px
-    style Analysis fill:#f3e5f5,stroke:#8e24aa,stroke-width:2px
-    style Decision fill:#fff8e1,stroke:#fbc02d,stroke-width:2px
-    style Bus fill:#f1f8e9,stroke:#7cb342,stroke-width:2px
+A ten-tier async pipeline from raw telemetry to credit decision:
+
+```
+Multi-Source Ingestion  →  Redis Streams  →  Event Classifier
+        ↓
+Feature Extractor  →  Digital Twin State  →  LLM Reasoner
+        ↓                                        ↓
+  Risk Simulator  ←→  Anomaly Detector  →  Cognitive Engine
+        ↓
+Intervention Agent  →  Live Dashboard  →  Audit Export
 ```
 
-![FinTwin System Architecture](assets/architecture_labeled.png)
-
-> **platform dna:** the core architecture is built around the "financial digital twin"—a temporal, versioned state layer that enables what-if simulations and deep narrative reasoning.
-
-| category | resources |
-|---|---|
-| **core foundations** | [mathematical foundations](Math.md), [technical schemas](Schema.md), [regulatory theory](Theory.md), [synthetic data strategy](Data.md) |
-| **tier summaries** | [t1: ingestion](tier1.md), [t2: nlp classifier](tier2.md), [t3: feature engine](tier3.md), [t4: digital twin](tier4.md), [t6: risk simulation](tier6.md), [t7: credit engine](tier7.md), [t9: anomaly detection](tier9.md) |
-
----
-
-## 2. project overview
-
-### what this system is
-
-fintwin is a **ten-tier financial intelligence stack** that transcends traditional credit scoring. it produces a **live digital twin** of an msme by ingesting heterogeneous signals—bank APIs, UPI logs, SMS alerts, and EMI records—to create a "DNA fingerprint" of business health. this twin drives a **cognitive credit engine** capable of narrative reasoning, predictive risk simulation (monte carlo), and autonomous interventions (proactive nudges and micro-loan pushes).
-
-## 3. challenge tiers at a glance
-
-| sr no. | pillar | focus area |
-|---|---|---|
-| 1 | **multi-source signal ingestion** | bank transactions, upi logs, sms alerts, emi schedules, open-banking feeds |
-| 2 | **event stream processor** | real-time typed financial event classification and sliding-window aggregation |
-| 3 | **behavioural feature engine** | spending volatility, income stability, peer cohort benchmarking, trend detection |
-| 4 | **digital twin state layer** | stateful, versioned user financial twin with dna fingerprint and temporal replay |
-| 5 | **llm reasoning layer** | narrative intelligence, chain-of-thought reasoning, contradiction detection |
-| 6 | **predictive risk simulation** | monte carlo risk projections, stress tests, recovery path modelling |
-| 7 | **cognitive credit engine** | behaviour-aware dynamic credit decisioning with bureau integration |
-| 8 | **proactive intervention agent** | autonomous contextual financial nudges, micro-loan push, emi negotiation |
-| 9 | **anomaly & deception detection** | fraud signals, scam defence, synthetic identity scoring |
-| 10 | **audit repository & dashboard** | full-stack live dashboard, what-if simulation, regulatory audit export |
+| Tier | Name | What it does |
+|------|------|-------------|
+| 1 | Multi-source ingestion | Bank APIs, UPI logs, SMS alerts, EMI records |
+| 2 | Event stream processor | Real-time typed event classification, sliding windows |
+| 3 | Behavioural feature engine | Volatility scoring, income stability, peer benchmarking |
+| 4 | Digital twin state layer | Stateful versioned twin with DNA fingerprint + temporal replay |
+| 5 | LLM reasoning layer | Narrative intelligence with chain-of-thought, contradiction detection |
+| 6 | Predictive risk simulation | Monte Carlo projections, stress tests, recovery path modelling |
+| 7 | Cognitive credit engine | Behaviour-aware dynamic decisioning with bureau integration |
+| 8 | Proactive intervention agent | Autonomous nudges, micro-loan push, EMI negotiation |
+| 9 | Anomaly & deception detection | Fraud signals, scam defence, synthetic identity scoring |
+| 10 | Audit repository & dashboard | Live dashboard, what-if simulation, regulatory export |
 
 ---
 
-## 4. deep dive features
+## Key Ideas
 
-### tier 4: digital twin state layer
-beyond a flat database, the **digital twin** is an event-sourced object that maintains the "DNA" of the MSME.
-*   **temporal replay:** `/audit/replay` allows the system to reconstruct the exact financial state at any millisecond.
-*   **dna fingerprinting:** creates a unique behavioral signature derived from spending cadence and counterparty entropy.
+**Digital Twin** — not a flat database. An event-sourced object that maintains the full DNA of the MSME. Replay to any millisecond with `/audit/replay`. Generate a behavioral fingerprint from spending cadence and counterparty entropy.
 
-### tier 5: llm reasoning (narrative intelligence)
-uses **phi-3 mini** with GBNF grammar constraints to generate "Reasoning Reports" that explain credit decisions in plain language, citing specific sliding-window anomalies.
+**LLM Reasoning** — Phi-3 Mini with GBNF grammar constraints. Produces plain-language "Reasoning Reports" that explain credit decisions, citing specific anomalies from sliding windows.
 
-### tier 8: proactive intervention agent
-independent of the user, the agent monitors the twin for cashflow stress.
-*   **micro-loan push:** if it detects a ₹5,000 EMI failure risk in the next 48 hours, it automatically pushes a short-term credit offer.
-*   **contextual nudges:** "Your UPI velocity is down 20% vs your peers—check your inventory levels."
+**Proactive Agent** — independent of the user. Monitors the twin for cashflow stress. Detects a ₹5,000 EMI failure risk 48 hours out and automatically pushes a short-term credit offer before the user ever knows there's a problem.
 
 ---
 
-## 5. mathematical foundations
+## Math
 
-**spending volatility (z-score) — [`src/features/engine.py`](src/features/engine.py:88):**
+**Spending volatility (z-score):**
+
 $$\sigma_{30d} = \sqrt{\frac{\sum (v_i - \bar{v})^2}{n}}$$
 
-**income stability index:**
-$$isi = \frac{\mu_{monthly\_inbound}}{\text{cv}_{monthly\_inbound} + 1}$$
+**Income stability index:**
 
-**monte carlo risk projection:**
-$$p(\text{default}) = \frac{1}{n} \sum_{k=1}^{n} \mathbb{1}(\text{state}_k \in \text{insolvency})$$
+$$\text{ISI} = \frac{\mu_{\text{monthly inbound}}}{\text{CV}_{\text{monthly inbound}} + 1}$$
+
+**Monte Carlo default probability:**
+
+$$P(\text{default}) = \frac{1}{N} \sum_{k=1}^{N} \mathbb{1}(\text{state}_k \in \text{insolvency})$$
 
 ---
 
-## 6. system bootstrapping
+## Getting Started
 
-### installation
 ```bash
-# install the core engine
+# install the backend
 pip install -e .
 
-# install the frontend dashboard
+# install the frontend
 cd frontend && npm install && cd ..
-```
 
-### run the online pipeline
-```bash
-# starts redis, the workers, the api, and the frontend
+# run everything (redis + workers + api + frontend)
 ./scripts/run_online.sh
 ```
 
+Detailed setup in [`docs/howtorun.md`](docs/howtorun.md).
+
 ---
 
-<p align="center">
-  <strong>fintwin</strong> — built for the airavat hackathon<br>
-  <em>team pookies</em>
-</p>
+## Docs
+
+All technical deep-dives live in [`/docs`](docs/):
+
+- [`api.md`](docs/api.md) — REST API reference
+- [`schema.md`](docs/schema.md) — data schemas
+- [`math.md`](docs/math.md) — mathematical foundations
+- [`theory.md`](docs/theory.md) — regulatory theory
+- [`Backend.md`](docs/Backend.md) — backend architecture
+- [`tier1.md`](docs/tier1.md) – [`tier9.md`](docs/tier9.md) — per-tier deep dives
+
+---
+
+<div align="center">
+
+**FinTwin** — because your credit score shouldn't be a rearview mirror.
+
+</div>

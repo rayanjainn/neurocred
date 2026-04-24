@@ -74,3 +74,12 @@ htmlcov/
 /tmp/airavat-redis.log
 .pytest_cache/
 *.pid
+
+# AI Agent Instructions (internal tooling — not for public repo)
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+CURSOR.md
+COPILOT.md
+.claude/
+.code-review-graph/
