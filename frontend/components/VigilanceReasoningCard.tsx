@@ -67,7 +67,7 @@ export function VigilanceReasoningCard({ userId }: VigilanceReasoningCardProps) 
          setInterrogationSessionId(null);
       }
     } catch (err) {
-      console.error("Error fetching Tier 7/8 data:", err);
+      console.error("Error fetching vigilance data:", err);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -142,7 +142,7 @@ export function VigilanceReasoningCard({ userId }: VigilanceReasoningCardProps) 
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 10 }}
-              className="p-4 flex flex-col h-full gap-3"
+              className="p-4 flex flex-col h-full gap-3 overflow-y-auto custom-scrollbar"
             >
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -225,7 +225,7 @@ export function VigilanceReasoningCard({ userId }: VigilanceReasoningCardProps) 
               initial={{ opacity: 0, x: 10 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -10 }}
-              className="p-4 flex flex-col h-full gap-3"
+              className="p-4 flex flex-col h-full gap-3 overflow-y-auto custom-scrollbar"
             >
               <div className="space-y-3">
                 <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest flex items-center gap-1.5">

@@ -78,6 +78,9 @@ export function TimeSeriesPanel({
   entityType = "msme",
   account,
 }: Props) {
+  const UPI_SERIES_COLOR = "#38bdf8";
+  const EXPENSE_SERIES_COLOR = "#22c55e";
+
   const [window, setWindow] = useState<Window>("90");
 
   const days = parseInt(window);
@@ -168,12 +171,12 @@ export function TimeSeriesPanel({
               <ComposedChart data={combo} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
                 <defs>
                   <linearGradient id="upiGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0} />
+                    <stop offset="5%" stopColor={UPI_SERIES_COLOR} stopOpacity={0.32} />
+                    <stop offset="95%" stopColor={UPI_SERIES_COLOR} stopOpacity={0.03} />
                   </linearGradient>
                   <linearGradient id="ewbGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.25} />
-                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                    <stop offset="5%" stopColor={EXPENSE_SERIES_COLOR} stopOpacity={0.25} />
+                    <stop offset="95%" stopColor={EXPENSE_SERIES_COLOR} stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
@@ -195,8 +198,8 @@ export function TimeSeriesPanel({
                   }}
                 />
                 <Legend iconSize={10} wrapperStyle={{ fontSize: 10 }} />
-                <Area type="monotone" dataKey="upi" stroke="hsl(var(--primary))" fill="url(#upiGrad)" strokeWidth={2} name="UPI" />
-                <Area type="monotone" dataKey="ewb" stroke="#22c55e" fill="url(#ewbGrad)" strokeWidth={1.5} name={entityType === "msme" ? "E-Way Bill" : "Expense"} />
+                <Area type="monotone" dataKey="upi" stroke={UPI_SERIES_COLOR} fill="url(#upiGrad)" strokeWidth={2.5} name="UPI" />
+                <Area type="monotone" dataKey="ewb" stroke={EXPENSE_SERIES_COLOR} fill="url(#ewbGrad)" strokeWidth={1.6} name={entityType === "msme" ? "E-Way Bill" : "Expense"} />
                 {twinSlice.length > 0 && (
                   <Line yAxisId="risk" type="monotone" dataKey="twin_risk" stroke="#f59e0b" strokeWidth={2} dot={false} name="Twin Risk" />
                 )}

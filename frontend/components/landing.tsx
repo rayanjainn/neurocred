@@ -400,7 +400,7 @@ const Navbar = () => {
 
   return (
     <nav className={cn("fixed top-0 left-0 right-0 z-[100] flex items-center justify-between px-5 md:px-10 py-5 transition-all duration-400", isScrolled ? "bg-bg/70 backdrop-blur-xl" : "bg-transparent")}>
-      <a href="#" className="font-display text-lg font-extrabold tracking-[0.15em]">CREDITIQ<span className="text-accent">.</span></a>
+      <a href="#" className="font-display text-lg font-extrabold tracking-[0.15em]">NEUROCRED<span className="text-accent">.</span></a>
       <div className="hidden md:flex gap-8">
         {['About', 'Services', 'Work', 'Contact'].map((item) => (
           <a key={item} href={`#${item.toLowerCase()}`} className="text-[0.78rem] font-normal tracking-[0.06em] text-text-muted hover:text-white transition-colors relative group">
@@ -452,7 +452,7 @@ const Hero = () => {
       <div className="flex flex-col items-center">
         <div ref={tagRef} className="text-[0.8rem] font-semibold tracking-[0.25em] uppercase text-accent mb-6 px-5 py-2 rounded-full bg-bg/50 backdrop-blur-md border border-accent/10 opacity-0">AI-Powered Credit Intelligence</div>
         <h1 ref={titleRef} className="font-display text-[clamp(5rem,18vw,14rem)] font-extrabold tracking-[0.06em] leading-[1.05] perspective-[600px] drop-shadow-[0_0_60px_rgba(200,255,0,0.15)]">
-          {"CREDITIQ".split('').map((char, i) => (<span key={i} className="hero-char inline-block origin-bottom-center">{char}</span>))}
+          {"NEUROCRED".split('').map((char, i) => (<span key={i} className="hero-char inline-block origin-bottom-center">{char}</span>))}
         </h1>
         <p ref={subRef} className="text-[clamp(1.15rem,2.5vw,1.5rem)] text-white max-w-[580px] mt-6 leading-[1.6] font-medium drop-shadow-[0_2px_16px_rgba(6,6,6,1)] opacity-0">Transform your credit analysis with advanced AI-driven insights and automated risk assessment</p>
         <div ref={actionsRef} className="flex flex-col sm:flex-row gap-4 mt-10 opacity-0 justify-center w-full sm:w-auto">
@@ -477,7 +477,7 @@ const Manifesto = () => {
     gsap.set(words, { opacity: 0.12 });
     gsap.to(words, { opacity: 1, stagger: 0.04, scrollTrigger: { trigger: textRef.current, start: 'top 65%', end: 'bottom 40%', scrub: true } });
   }, []);
-  const text = "CreditIQ revolutionizes credit assessment with cutting-edge AI technology. We analyze thousands of data points to provide accurate, real-time credit scores and risk assessments. Our platform helps financial institutions make smarter, faster lending decisions while reducing risk and increasing operational efficiency.";
+  const text = "NeuroCred revolutionizes credit assessment with cutting-edge AI technology. We analyze thousands of data points to provide accurate, real-time credit scores and risk assessments. Our platform helps financial institutions make smarter, faster lending decisions while reducing risk and increasing operational efficiency.";
   return (
     <section id="about" className="min-h-screen flex items-center justify-center py-20 md:py-32 relative z-10">
       <div className="max-w-[860px] px-6 md:px-12">
@@ -632,13 +632,13 @@ const Footer = () => {
   return (
     <footer className="relative z-10 bg-bg-alt border-top border-glass-border pt-12 pb-6">
       <div ref={innerRef} className="max-w-[1200px] mx-auto px-5 md:px-10 flex flex-col md:flex-row justify-between items-start gap-8">
-        <div className="flex flex-col"><span className="font-display text-lg font-extrabold tracking-[0.15em]">CREDITIQ<span className="text-accent">.</span></span><p className="text-[0.75rem] text-text-dim mt-1">AI-Powered Credit Intelligence</p></div>
+        <div className="flex flex-col"><span className="font-display text-lg font-extrabold tracking-[0.15em]">NEUROCRED<span className="text-accent">.</span></span><p className="text-[0.75rem] text-text-dim mt-1">AI-Powered Credit Intelligence</p></div>
         <div className="flex gap-16 md:gap-20">
           <div className="flex flex-col gap-2"><span className="text-[0.65rem] font-semibold tracking-[0.15em] uppercase text-text-muted mb-1">Navigation</span>{['Services', 'About', 'Contact'].map(item => (<a key={item} href={`#${item.toLowerCase()}`} className="text-[0.78rem] text-text-dim hover:text-accent transition-colors">{item}</a>))}</div>
           <div className="flex flex-col gap-2"><span className="text-[0.65rem] font-semibold tracking-[0.15em] uppercase text-text-muted mb-1">Company</span>{['Privacy', 'Terms', 'Support'].map(item => (<a key={item} href="#" className="text-[0.78rem] text-text-dim hover:text-accent transition-colors">{item}</a>))}</div>
         </div>
       </div>
-      <div className="max-w-[1200px] mx-auto px-5 md:px-10 flex flex-col md:flex-row justify-between mt-10 pt-5 border-t border-glass-border text-[0.68rem] text-text-dim"><span>© 2025 CreditIQ</span><span className="mt-1 md:mt-0">Powered by Advanced AI</span></div>
+      <div className="max-w-[1200px] mx-auto px-5 md:px-10 flex flex-col md:flex-row justify-between mt-10 pt-5 border-t border-glass-border text-[0.68rem] text-text-dim"><span>© 2026 NeuroCred</span><span className="mt-1 md:mt-0">Powered by Advanced AI</span></div>
     </footer>
   );
 };

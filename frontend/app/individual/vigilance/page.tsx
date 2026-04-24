@@ -24,14 +24,14 @@ export default function IndividualVigilancePage() {
     <div className="p-6 w-full max-w-[1400px] mx-auto space-y-6">
       <PageHeader
         title="Guard AI · Vigilance & Reasoning"
-        description="Real-time deception analysis, identity integrity signals, and AI narrative explanation of your risk profile (Tier 7-9 engines)"
+        description="Real-time deception analysis, identity integrity signals, and AI narrative explanation of your risk profile"
       />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-2">
         {[
           { icon: ShieldCheck, label: "Deception Detection", desc: "ML-powered scam and identity-shift signal analysis across your transaction graph." },
-          { icon: Eye, label: "Vigilance Engine", desc: "Tier 8/9: Continuous monitoring for fraud ring proximity and velocity anomalies." },
-          { icon: Radar, label: "Reasoning Layer", desc: "Tier 7: Chain-of-thought explanation of every risk score factor for full transparency." },
+          { icon: Eye, label: "Vigilance Engine", desc: "Continuous monitoring for fraud ring proximity and velocity anomalies." },
+          { icon: Radar, label: "Reasoning Layer", desc: "Chain-of-thought explanation of every risk score factor for full transparency." },
         ].map((item) => (
           <Card key={item.label} className="border-border shadow-sm">
             <CardContent className="p-5 flex flex-col gap-3">

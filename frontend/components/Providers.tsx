@@ -8,7 +8,15 @@ import { VoiceControlProvider } from "@/src/voice/VoiceControlProvider";
 export default function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-      <ReactLenis root options={{ lerp: 0.08, duration: 1.2, smoothWheel: true }}>
+      <ReactLenis
+        root
+        options={{
+          lerp: 0.08,
+          duration: 1.2,
+          smoothWheel: true,
+          syncTouch: true,
+        }}
+      >
         <AuthProvider>
           <VoiceControlProvider>
             <AppShell>{children}</AppShell>

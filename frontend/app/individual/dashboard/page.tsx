@@ -35,6 +35,7 @@ import {
   Tooltip,
 } from "recharts";
 import { VigilanceReasoningCard } from "@/components/VigilanceReasoningCard";
+import { DigitalTwinCard } from "@/components/DigitalTwinCard";
 
 function formatINR(n: number) {
   if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
@@ -266,9 +267,12 @@ export default function IndividualDashboard() {
           ))}
         </div>
 
-        {/* Guard AI — Vigilance + Reasoning */}
+        {/* Talking Twin + Guard AI */}
         <div className="xl:col-span-4">
-          <VigilanceReasoningCard userId={user.id} />
+          <div className="space-y-4">
+            <DigitalTwinCard score={score} />
+            <VigilanceReasoningCard userId={user.id} />
+          </div>
         </div>
       </div>
 

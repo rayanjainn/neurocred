@@ -34,7 +34,7 @@ export default function ForceGraph3DComponent({
   const graphRef = useRef<any>(null);
 
   useEffect(() => {
-    if (!containerRef.current || nodes.length === 0) return;
+    if (!containerRef.current || nodes.length === 0 || graphRef.current) return;
 
     let localGraph: any = null;
     let ro: ResizeObserver | null = null;
@@ -66,7 +66,13 @@ export default function ForceGraph3DComponent({
             )
             .nodeRelSize(9)
             .nodeResolution(24)
-            .nodeLabel((node: any) => `<div style="color:white; background:#161b22; padding:8px 12px; border-radius:8px; border: 1px solid #30363d; font-size:14px; font-weight:bold;">${node.label || node.id}</div>`)
+            .nodeLabel((node: any) => `
+              <div style="color: #ffffff; background: rgba(13, 17, 23, 0.95); padding: 10px 14px; border-radius: 12px; border: 1px solid rgba(48, 54, 61, 0.8); font-size: 13px; font-weight: 600; box-shadow: 0 4px 12px rgba(0,0,0,0.5); backdrop-filter: blur(8px);">
+                <div style="color: #8b949e; font-size: 10px; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.05em;">Entity Node</div>
+                ${node.label || node.id}
+                ${node.flagged ? '<div style="color: #ff7b72; font-size: 10px; margin-top: 4px;">⚠️ HIGH RISK FRAUD RING</div>' : ''}
+              </div>
+            `)
             .nodeOpacity(1)
             .linkColor(() => "rgba(0, 245, 212, 0.5)")
             .linkWidth(3)
@@ -118,7 +124,7 @@ export default function ForceGraph3DComponent({
       graphRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [nodes.length > 0]);
 
   useEffect(() => {
     if (!graphRef.current || nodes.length === 0) return;

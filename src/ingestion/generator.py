@@ -1094,7 +1094,12 @@ def generate_upi_transactions(profiles: list[dict] | dict | UserProfile, *args, 
             direction = random.choices(["inbound", "outbound"], weights=[p_inbound, 1.0 - p_inbound])[0]
 
             if ptype == "SHELL_CIRCULAR" and ring_members:
-                counterparty = ring_members[(pos + 1) % len(ring_members)] if random.random() < 0.70 else random.choice(all_upi_ids)
+                # Force outbound to the next ring member to create a directed cycle
+                if random.random() < 0.85:
+                    counterparty = ring_members[(pos + 1) % len(ring_members)]
+                    direction = "outbound"
+                else:
+                    counterparty = random.choice(all_upi_ids)
                 txn_type = "p2p"
                 cat = "TRANSFER"
             else:

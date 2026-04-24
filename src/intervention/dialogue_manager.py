@@ -50,6 +50,7 @@ Current twin state:
 # ── intent detection ──────────────────────────────────────────────────────────
 
 _INTENT_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"(can\s+i\s+buy|can\s+i\s+purchase|afford|buy\s+a\s+car|car\s+loan|vehicle\s+loan|bike\s+loan)", re.I), "affordability"),
     (re.compile(r"(liquidity|cash|buffer|survival)", re.I), "liquidity"),
     (re.compile(r"(emi|loan|debt|repay)", re.I), "emi"),
     (re.compile(r"(save|savings|invest|sip|rd)", re.I), "savings"),
@@ -110,6 +111,7 @@ def _rule_based_response(
     message: str,
     twin: DigitalTwin,
     cibil_override: Optional[int] = None,
+    monthly_income: Optional[float] = None,
 ) -> str:
     """
     Deterministic template response for prototype.
@@ -119,6 +121,75 @@ def _rule_based_response(
     cibil = twin.cibil_like_score()
     if isinstance(cibil_override, int):
         cibil = max(300, min(900, cibil_override))
+
+    def _extract_inr_amount(raw: str) -> Optional[float]:
+        text = (raw or "").lower().replace(",", "")
+        matches = list(re.finditer(r"(?:₹|rs\.?\s*)?\s*(\d+(?:\.\d+)?)\s*(crore|cr|lakh|lakhs|lac|lacs|k|thousand)?", text))
+        if not matches:
+            return None
+
+        amounts: list[float] = []
+        mult = {
+            "crore": 10_000_000.0,
+            "cr": 10_000_000.0,
+            "lakh": 100_000.0,
+            "lakhs": 100_000.0,
+            "lac": 100_000.0,
+            "lacs": 100_000.0,
+            "k": 1_000.0,
+            "thousand": 1_000.0,
+        }
+
+        for m in matches:
+            try:
+                value = float(m.group(1))
+            except (TypeError, ValueError):
+                continue
+            unit = (m.group(2) or "").lower().strip()
+            if unit in mult:
+                amounts.append(value * mult[unit])
+            elif value >= 1_000:
+                amounts.append(value)
+
+        return max(amounts) if amounts else None
+
+    def _estimate_emi(principal: float, annual_rate: float = 0.105, months: int = 60) -> float:
+        if principal <= 0 or months <= 0:
+            return 0.0
+        r = annual_rate / 12.0
+        if r <= 0:
+            return principal / months
+        factor = (1 + r) ** months
+        return principal * r * factor / max(factor - 1, 1e-6)
+
+    if intent == "affordability":
+        monthly = max(10_000.0, float(monthly_income or 0.0) or 50_000.0)
+        amount = _extract_inr_amount(message)
+        if amount is None:
+            return (
+                "MAYBE. I need the purchase amount and expected down payment to assess this correctly. "
+                "Share those and I will give a direct YES/MAYBE/NO affordability verdict."
+            )
+
+        down_payment_ratio = 0.20
+        financed = amount * (1.0 - down_payment_ratio)
+        new_emi = _estimate_emi(financed)
+        current_emi = max(0.0, twin.emi_burden_ratio) * monthly
+        projected_burden = (current_emi + new_emi) / monthly
+
+        if cibil >= 750 and projected_burden <= 0.40 and twin.cash_buffer_days >= 60 and twin.income_stability >= 0.55:
+            verdict = "YES"
+        elif cibil >= 680 and projected_burden <= 0.50 and twin.cash_buffer_days >= 30 and twin.income_stability >= 0.45:
+            verdict = "MAYBE"
+        else:
+            verdict = "NO"
+
+        return (
+            f"{verdict}. For a purchase of about ₹{int(amount):,}, your estimated EMI is ₹{int(new_emi):,}/month "
+            f"(assuming 20% down payment, 5-year tenure, 10.5% interest). "
+            f"Your projected EMI burden becomes about {projected_burden:.0%} with score {cibil} and cash buffer {twin.cash_buffer_days:.1f} days. "
+            "Proceed only if you keep emergency buffer above 30 days and avoid taking another loan this month."
+        )
 
     if intent == "liquidity":
         if twin.liquidity_health == "LOW":
@@ -189,7 +260,7 @@ def _rule_based_response(
 
     # default
     return (
-        f"I'm your Airavat Digital Twin assistant. Your current financial health: "
+        f"I'm your NeuroCred Digital Twin assistant. Your current financial health: "
         f"CIBIL-like score {cibil}, liquidity {twin.liquidity_health}, "
         f"EMI burden {twin.emi_burden_ratio:.0%}. "
         "Ask me anything about your finances!"
@@ -216,6 +287,8 @@ class DialogueManager:
         *,
         include_simulation: bool = False,
         cibil_override: Optional[int] = None,
+        monthly_income: Optional[float] = None,
+        user_name: Optional[str] = None,
     ) -> dict[str, Any]:
         """
         Process one user message and return the twin's response.
@@ -240,6 +313,7 @@ class DialogueManager:
             contextual_message,
             twin,
             cibil_override=resolved_cibil,
+            monthly_income=monthly_income,
         )
 
         return {

@@ -98,7 +98,7 @@ function TwinTimeline({ userId }: { userId: string }) {
     ver: `v${v.version ?? "?"}`,
     risk: Math.round((v.risk_score ?? 0) * 100),
     liquidity: Math.round((v.liquidity_health ?? 0) * 100),
-    cibil: v.cibil_like_score ?? v.cibil_score ?? 0,
+    credit: v.credit_score ?? v.cibil_like_score ?? v.cibil_score ?? 0,
     ts: v.last_updated ?? v.created_at ?? "",
     persona: v.persona ?? "unknown",
   }));
@@ -121,10 +121,10 @@ function TwinTimeline({ userId }: { userId: string }) {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                 <XAxis dataKey="ver" tick={{ fontSize: 10 }} />
                 <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} />
-                <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: any, n: string) => [`${v}${n === "cibil" ? "" : "%"}`, n]} />
+                <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: any, n: string) => [`${v}${n === "credit" ? "" : "%"}`, n]} />
                 <Line type="monotone" dataKey="risk" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} name="Risk" />
                 <Line type="monotone" dataKey="liquidity" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} name="Liquidity" />
-                <Line type="monotone" dataKey="cibil" stroke="#c8ff00" strokeWidth={2} dot={{ r: 3 }} name="CIBIL-Like" />
+                <Line type="monotone" dataKey="credit" stroke="#c8ff00" strokeWidth={2} dot={{ r: 3 }} name="Credit Score" />
               </LineChart>
             </ResponsiveContainer>
 
@@ -679,7 +679,7 @@ function LiveWhatIfPanel({ userId }: { userId: string }) {
                       Persona: <span className="font-semibold">{String(result.updated_twin_state.persona ?? "—")}</span>
                     </div>
                     <div className="bg-muted/30 rounded px-2 py-1 border border-border/50">
-                      CIBIL-Like: <span className="font-semibold">{String(result.updated_twin_state.cibil_like_score ?? "—")}</span>
+                      Credit Score: <span className="font-semibold">{String(result.updated_twin_state.credit_score ?? result.updated_twin_state.cibil_like_score ?? "—")}</span>
                     </div>
                   </div>
                 )}
@@ -776,9 +776,22 @@ function ReasoningTracePanel({ userId }: { userId: string }) {
 // ─── Audit Report Exporter ────────────────────────────────────────────────────
 function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: any[] }) {
   const [generating, setGenerating] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const triggerDownload = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
 
   const generateReport = async (format: "json" | "pdf") => {
     setGenerating(true);
+    setExportError(null);
     try {
       if (format === "json") {
         const report = await adminApi.getTier10Report(userId);
@@ -790,21 +803,14 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
           exported_at: new Date().toISOString(),
         };
         const blob = new Blob([JSON.stringify(merged, null, 2)], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `airavat_tier10_audit_${userId}_${Date.now()}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
+        triggerDownload(blob, `neurocred_audit_${userId}_${Date.now()}.json`);
       } else {
-        const blob = await adminApi.downloadTier10ReportPdf(userId);
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `airavat_tier10_audit_${userId}_${Date.now()}.pdf`;
-        a.click();
-        URL.revokeObjectURL(url);
+        const { blob, filename } = await adminApi.downloadTier10ReportPdf(userId);
+        triggerDownload(blob, filename);
       }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Failed to export report. Please retry.";
+      setExportError(msg);
     } finally {
       setGenerating(false);
     }
@@ -829,7 +835,7 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
               <div className="p-2 bg-primary/10 rounded-lg"><FileText className="w-4 h-4 text-primary" /></div>
               <div>
                 <p className="text-sm font-semibold">Full Audit Report</p>
-                <p className="text-[10px] text-muted-foreground">JSON · full machine-readable Tier 10 bundle</p>
+                <p className="text-[10px] text-muted-foreground">JSON · full machine-readable compliance bundle</p>
               </div>
             </div>
             <Button
@@ -838,7 +844,7 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
               onClick={() => generateReport("json")}
             >
               {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-              Export Tier 10 Report (JSON)
+              Export Report (JSON)
             </Button>
           </div>
 
@@ -857,7 +863,7 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
               onClick={() => generateReport("pdf")}
             >
               {generating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
-              Export Tier 10 Report (PDF)
+              Export Report (PDF)
             </Button>
           </div>
         </div>
@@ -877,6 +883,12 @@ function AuditReportExporter({ userId, auditLog }: { userId: string; auditLog: a
             </p>
           ))}
         </div>
+
+        {exportError && (
+          <div className="mt-3 text-xs text-red-300 border border-red-400/30 bg-red-500/10 rounded-lg px-3 py-2">
+            {exportError}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -919,7 +931,7 @@ export default function ComplianceDashboard() {
   return (
     <div className="p-6 max-w-[1600px] mx-auto space-y-6">
       <PageHeader
-        title="Tier 10 · Explainable Audit Repository"
+        title="Explainable Audit Repository"
         description="Full compliance dashboard — digital twin evolution, risk projections, intervention history, credit decisions, anomaly heatmap, live What-If, and one-click regulatory audit export."
         actions={
           <div className="flex items-center gap-2">

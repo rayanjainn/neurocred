@@ -284,7 +284,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
               {!sidebarCollapsed && (
                 <div>
-                  <p className="text-sm font-semibold tracking-tight">MSME Credit</p>
+                  <p className="text-sm font-semibold tracking-tight">NeuroCred</p>
                   <p className="text-[11px] text-muted-foreground">{ROLE_LABELS[user.role]}</p>
                 </div>
               )}

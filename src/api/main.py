@@ -1521,7 +1521,8 @@ async def get_twin_history(
             str(snap.get("persona", "")),
         )
 
-    svc = TwinService(app.state.redis)
+    redis: aioredis.Redis = app.state.redis
+    svc = TwinService(redis)
     raw_history = await svc.get_history(user_id, limit=max(limit * 5, limit))
 
     if material_only:
@@ -1539,11 +1540,40 @@ async def get_twin_history(
     else:
         history = raw_history[:limit]
 
+    score_snapshot = await _load_voice_score_snapshot(redis, user_id)
+    resolved_credit: int | None = None
+    if score_snapshot:
+        try:
+            resolved_credit = int(score_snapshot.get("credit_score") or 0)
+        except (TypeError, ValueError):
+            resolved_credit = None
+        if resolved_credit is not None and resolved_credit > 0:
+            resolved_credit = max(300, min(900, resolved_credit))
+        else:
+            resolved_credit = None
+
+    enriched_history: list[dict[str, Any]] = []
+    for snap in history:
+        item = dict(snap)
+        if resolved_credit is not None:
+            item["cibil_like_score"] = resolved_credit
+            item["credit_score"] = resolved_credit
+            if score_snapshot.get("risk_band"):
+                item["risk_band"] = score_snapshot.get("risk_band")
+        elif "cibil_like_score" not in item:
+            try:
+                rs = float(item.get("risk_score", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                rs = 0.0
+            item["cibil_like_score"] = int(round(900 - max(0.0, min(1.0, rs)) * 600))
+            item["credit_score"] = item["cibil_like_score"]
+        enriched_history.append(item)
+
     return {
         "user_id": user_id,
-        "count": len(history),
+        "count": len(enriched_history),
         "raw_count": len(raw_history),
-        "history": history,
+        "history": enriched_history,
     }
 
 
@@ -1651,13 +1681,22 @@ async def update_twin(user_id: str) -> dict[str, Any]:
     fv = BehaviouralFeatureVector.model_validate(data)
     svc = TwinService(app.state.redis)
     twin = await svc.update_from_features(fv)
+    score_snapshot = await _load_voice_score_snapshot(app.state.redis, user_id)
+    resolved_credit = twin.cibil_like_score()
+    if score_snapshot:
+        try:
+            snap_credit = int(score_snapshot.get("credit_score", resolved_credit) or resolved_credit)
+            resolved_credit = max(300, min(900, snap_credit))
+        except (TypeError, ValueError):
+            pass
     return {
         "status": "updated",
         "user_id": twin.user_id,
         "version": twin.version,
         "risk_score": twin.risk_score,
         "liquidity_health": twin.liquidity_health,
-        "cibil_like_score": twin.cibil_like_score(),
+        "cibil_like_score": resolved_credit,
+        "credit_score": resolved_credit,
         "persona": twin.persona,
         "avatar_expression": twin.avatar_state.expression,
     }
@@ -1800,12 +1839,21 @@ async def chat_with_twin(user_id: str, body: dict[str, Any]) -> Any:
         except Exception:
             cibil_override = None
 
+    fv = await _load_latest_feature_vector(redis, user_id)
+    monthly_income = 50000.0
+    if fv:
+        monthly_income = max(10000.0, fv.income_30d or (fv.income_90d/3.0) or 50000.0)
+
+    user_name = _lookup_user_name_from_store(user_id) or "User"
+
     dm = DialogueManager()
     response_data = dm.chat(
         message,
         twin,
         conversation_history=history,
         cibil_override=cibil_override,
+        monthly_income=monthly_income,
+        user_name=user_name,
     )
 
     ts = datetime.utcnow().isoformat()
@@ -1872,6 +1920,26 @@ async def get_twin_report(
 
     rtype = report_type if report_type in ("daily_summary", "weekly_summary") else "daily_summary"
     report = generate_report(twin, report_type=rtype)  # type: ignore[arg-type]
+
+    score_snapshot = await _load_voice_score_snapshot(app.state.redis, user_id)
+    if score_snapshot:
+        try:
+            resolved_credit = int(score_snapshot.get("credit_score", report.get("cibil_like_score", 0)) or 0)
+        except (TypeError, ValueError):
+            resolved_credit = 0
+        if resolved_credit > 0:
+            resolved_credit = max(300, min(900, resolved_credit))
+            report["cibil_like_score"] = resolved_credit
+            report["credit_score"] = resolved_credit
+            if resolved_credit >= 750:
+                report["risk_status"] = "Excellent"
+            elif resolved_credit >= 650:
+                report["risk_status"] = "Good"
+            elif resolved_credit >= 550:
+                report["risk_status"] = "Average"
+            else:
+                report["risk_status"] = "Needs Attention"
+
     return report
 
 
@@ -2064,22 +2132,47 @@ def _pdf_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
+def _wrap_pdf_lines(lines: list[str], max_chars: int = 100) -> list[str]:
+    wrapped: list[str] = []
+    for raw in lines:
+        text = str(raw)
+        if text == "":
+            wrapped.append("")
+            continue
+        while len(text) > max_chars:
+            wrapped.append(text[:max_chars])
+            text = text[max_chars:]
+        wrapped.append(text)
+    return wrapped
+
+
 def _render_simple_pdf(lines: list[str]) -> bytes:
     """
-    Render a compact single-page PDF using built-in Type1 font primitives.
-    This avoids external dependencies while enabling one-click PDF export.
+    Render a multi-page PDF using built-in Type1 font primitives.
+    This avoids external dependencies while supporting full evidence export.
     """
-    text_lines = [line[:110] for line in lines][:58]
-    text_ops = ["BT", "/F1 10 Tf", "12 TL", "40 760 Td"]
-    for line in text_lines:
-        text_ops.append(f"({_pdf_escape(line)}) Tj")
-        text_ops.append("T*")
-    text_ops.append("ET")
-    stream = "\n".join(text_ops).encode("latin-1", errors="replace")
+    all_lines = _wrap_pdf_lines(lines, max_chars=100)
+    if not all_lines:
+        all_lines = ["No report data available."]
+
+    lines_per_page = 55
+    pages: list[list[str]] = [
+        all_lines[i:i + lines_per_page]
+        for i in range(0, len(all_lines), lines_per_page)
+    ]
+    total_pages = len(pages)
 
     buf = bytearray()
     buf.extend(b"%PDF-1.4\n")
-    offsets = [0] * 6
+
+    # Object layout:
+    # 1: catalog
+    # 2: pages
+    # 3..(2+2N): alternating page/content objects
+    # (3+2N): font object
+    font_obj_id = 3 + (2 * total_pages)
+    object_count = font_obj_id
+    offsets = [0] * (object_count + 1)
 
     def _append_obj(obj_id: int, payload: bytes) -> None:
         offsets[obj_id] = len(buf)
@@ -2088,20 +2181,51 @@ def _render_simple_pdf(lines: list[str]) -> bytes:
         buf.extend(b"\nendobj\n")
 
     _append_obj(1, b"<< /Type /Catalog /Pages 2 0 R >>")
-    _append_obj(2, b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
-    _append_obj(
-        3,
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    )
-    _append_obj(4, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
-    _append_obj(5, f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream")
+
+    kids_refs: list[str] = []
+    for idx in range(total_pages):
+        page_obj_id = 3 + (2 * idx)
+        kids_refs.append(f"{page_obj_id} 0 R")
+    kids = " ".join(kids_refs)
+    _append_obj(2, f"<< /Type /Pages /Kids [{kids}] /Count {total_pages} >>".encode("ascii"))
+
+    for page_index, page_lines in enumerate(pages, start=1):
+        page_obj_id = 3 + (2 * (page_index - 1))
+        content_obj_id = page_obj_id + 1
+
+        text_lines = page_lines
+        if total_pages > 1:
+            text_lines = [f"Page {page_index}/{total_pages}", ""] + page_lines
+
+        text_ops = ["BT", "/F1 10 Tf", "12 TL", "40 760 Td"]
+        for line in text_lines:
+            text_ops.append(f"({_pdf_escape(line)}) Tj")
+            text_ops.append("T*")
+        text_ops.append("ET")
+        stream = "\n".join(text_ops).encode("latin-1", errors="replace")
+
+        _append_obj(
+            page_obj_id,
+            (
+                "<< /Type /Page /Parent 2 0 R "
+                "/MediaBox [0 0 612 792] "
+                f"/Resources << /Font << /F1 {font_obj_id} 0 R >> >> "
+                f"/Contents {content_obj_id} 0 R >>"
+            ).encode("ascii"),
+        )
+        _append_obj(
+            content_obj_id,
+            f"<< /Length {len(stream)} >>\nstream\n".encode("ascii") + stream + b"\nendstream",
+        )
+
+    _append_obj(font_obj_id, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
     xref_pos = len(buf)
-    buf.extend(b"xref\n0 6\n")
+    buf.extend(f"xref\n0 {object_count + 1}\n".encode("ascii"))
     buf.extend(b"0000000000 65535 f \n")
-    for i in range(1, 6):
+    for i in range(1, object_count + 1):
         buf.extend(f"{offsets[i]:010d} 00000 n \n".encode("ascii"))
-    buf.extend(b"trailer\n<< /Size 6 /Root 1 0 R >>\n")
+    buf.extend(f"trailer\n<< /Size {object_count + 1} /Root 1 0 R >>\n".encode("ascii"))
     buf.extend(f"startxref\n{xref_pos}\n%%EOF\n".encode("ascii"))
     return bytes(buf)
 
@@ -2200,8 +2324,20 @@ async def _collect_tier10_audit_bundle(redis: aioredis.Redis, user_id: str) -> d
     twin_svc = TwinService(redis)
     twin = await twin_svc.get(user_id)
     current_twin = twin.model_dump() if twin else {}
+    score_snapshot = await _load_voice_score_snapshot(redis, user_id)
     if twin:
         current_twin["cibil_like_score"] = twin.cibil_like_score()
+
+    if score_snapshot:
+        try:
+            resolved_credit = int(score_snapshot.get("credit_score", current_twin.get("cibil_like_score", 0)) or 0)
+        except (TypeError, ValueError):
+            resolved_credit = 0
+        if resolved_credit > 0:
+            resolved_credit = max(300, min(900, resolved_credit))
+            current_twin["cibil_like_score"] = resolved_credit
+            current_twin["credit_score"] = resolved_credit
+            current_twin["risk_band"] = score_snapshot.get("risk_band") or current_twin.get("risk_band")
 
     twin_history = await twin_svc.get_history(user_id, limit=200)
 
@@ -2267,26 +2403,67 @@ def _tier10_report_lines(report: dict[str, Any]) -> list[str]:
     twin_state = report.get("twin_current_state") or {}
     sim_artifacts = report.get("simulation_artifacts") or {}
     intervention = report.get("intervention_log") or {}
+    decisions = report.get("credit_decisions") or []
+    triggers = intervention.get("fired_triggers") or []
+    anomalies = report.get("anomaly_detections") or {}
+
+    def _fmt_money(value: Any) -> str:
+        try:
+            amount = float(value)
+        except (TypeError, ValueError):
+            return "n/a"
+        if amount <= 0:
+            return "n/a"
+        return f"INR {amount:,.0f}"
+
+    latest_decision = decisions[0] if decisions else {}
+    latest_trigger = triggers[0] if triggers else {}
+
+    top_anomaly_types: list[str] = []
+    for key in ("anomalies", "alerts", "flags"):
+        rows = anomalies.get(key)
+        if isinstance(rows, list):
+            for row in rows[:3]:
+                if isinstance(row, dict):
+                    label = row.get("type") or row.get("name") or row.get("label")
+                    if label:
+                        top_anomaly_types.append(str(label))
+        if top_anomaly_types:
+            break
 
     lines = [
-        "Airavat Tier 10 Regulatory Audit Report",
+        "NeuroCred Regulatory Audit Report",
         f"Generated At: {report.get('generated_at', '')}",
         f"User ID: {report.get('user_id', '')}",
         f"Standard: {report.get('regulatory_standard', '')}",
         "",
-        "Twin Current State",
+        "Executive Snapshot",
         f"Risk Score: {twin_state.get('risk_score', 'n/a')}",
         f"Liquidity Health: {twin_state.get('liquidity_health', 'n/a')}",
         f"CIBIL-Like Score: {twin_state.get('cibil_like_score', 'n/a')}",
         f"Persona: {twin_state.get('persona', 'n/a')}",
+        f"Monthly Income: {_fmt_money(twin_state.get('monthly_income'))}",
+        f"Monthly Expense: {_fmt_money(twin_state.get('monthly_expense'))}",
         "",
-        "Audit Sections",
+        "Credit Decisioning",
         f"Twin History Entries: {len(report.get('twin_state_history') or [])}",
         f"Reasoning Trace Present: {'yes' if report.get('llm_reasoning_traces') else 'no'}",
         f"Credit Decisions: {len(report.get('credit_decisions') or [])}",
+        f"Latest Decision Status: {latest_decision.get('status', 'n/a')}",
+        f"Latest Recommended Limit: {_fmt_money(latest_decision.get('recommended_credit_limit'))}",
+        f"Latest APR: {latest_decision.get('apr', 'n/a')}",
+        "",
+        "Intervention And Vigilance",
         f"Intervention Events: {len((intervention.get('audit_events') or []))}",
         f"Fired Triggers: {len((intervention.get('fired_triggers') or []))}",
+        f"Latest Trigger Type: {latest_trigger.get('type', 'n/a')}",
+        f"Latest Trigger Priority: {latest_trigger.get('priority', 'n/a')}",
         f"Anomaly Payload Present: {'yes' if report.get('anomaly_detections') else 'no'}",
+        (
+            f"Top Anomaly Labels: {', '.join(top_anomaly_types)}"
+            if top_anomaly_types
+            else "Top Anomaly Labels: n/a"
+        ),
         "",
         "Simulation Artifacts",
         f"Last Simulation ID: {sim_artifacts.get('last_simulation_id') or 'n/a'}",
@@ -2294,9 +2471,25 @@ def _tier10_report_lines(report: dict[str, Any]) -> list[str]:
         f"EWS Snapshot Present: {'yes' if sim_artifacts.get('ews_snapshot') else 'no'}",
         f"Fan Chart Present: {'yes' if sim_artifacts.get('fan_chart') else 'no'}",
         "",
-        "This PDF is a compact compliance summary.",
-        "Use JSON export for full machine-readable evidence bundle.",
+        "Document Scope",
+        "This PDF is a regulator friendly summary for review meetings.",
+        "Below section includes the complete machine readable evidence bundle.",
+        "",
+        "Full Evidence Bundle (JSON)",
+        "=================================",
     ]
+
+    try:
+        full_report_lines = json.dumps(
+            report,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        ).splitlines()
+    except Exception:
+        full_report_lines = ["{\"error\": \"Unable to serialize full report bundle\"}"]
+
+    lines.extend(full_report_lines)
 
     return lines
 
@@ -2341,6 +2534,17 @@ async def tier10_live_whatif(body: dict[str, Any]) -> dict[str, Any]:
     if twin:
         twin_data["cibil_like_score"] = twin.cibil_like_score()
 
+    score_snapshot = await _load_voice_score_snapshot(redis, user_id)
+    if score_snapshot:
+        try:
+            resolved_credit = int(score_snapshot.get("credit_score", twin_data.get("cibil_like_score", 0)) or 0)
+        except (TypeError, ValueError):
+            resolved_credit = 0
+        if resolved_credit > 0:
+            resolved_credit = max(300, min(900, resolved_credit))
+            twin_data["cibil_like_score"] = resolved_credit
+            twin_data["credit_score"] = resolved_credit
+
     proactive_offer = simulation_result.get("proactive_offer") or {}
     updated_credit_limit = (
         proactive_offer.get("approved_amount")
@@ -2382,7 +2586,7 @@ async def tier10_regulatory_report(user_id: str, format: str = "json") -> Any:
 
     if fmt == "pdf":
         pdf_bytes = _render_simple_pdf(_tier10_report_lines(report))
-        filename = f"airavat_tier10_audit_{user_id}_{int(time.time())}.pdf"
+        filename = f"neurocred_audit_{user_id}_{int(time.time())}.pdf"
         return Response(
             content=pdf_bytes,
             media_type="application/pdf",

@@ -92,7 +92,7 @@ export default function FraudTopologyPage() {
   const cleanCount = globalGraph.nodes.filter((n: any) => !n.flagged).length;
 
   return (
-    <div className="p-6">
+    <div className="p-6 h-[calc(100vh-64px)] overflow-y-auto custom-scrollbar">
       <PageHeader
         title="Fraud Topology"
         description="System-wide UPI transaction network with all fraud rings highlighted"
@@ -235,7 +235,18 @@ export default function FraudTopologyPage() {
                       <Tooltip
                         formatter={(v: any) => [`${v}%`, "PageRank"]}
                         labelFormatter={(_: any, payload: any) => payload?.[0]?.payload?.fullId ?? ""}
-                        contentStyle={{ fontSize: 11 }}
+                        contentStyle={{ 
+                          backgroundColor: 'rgba(2, 6, 23, 0.95)', 
+                          borderColor: 'rgba(30, 41, 59, 0.8)',
+                          borderRadius: '12px',
+                          color: '#f8fafc',
+                          fontSize: '11px',
+                          boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)',
+                          backdropFilter: 'blur(8px)',
+                          border: '1px solid rgba(13, 148, 136, 0.2)'
+                        }}
+                        itemStyle={{ color: '#0d9488' }}
+                        labelStyle={{ color: '#94a3b8', marginBottom: '4px', fontWeight: 'bold' }}
                       />
                       <Bar dataKey="pagerank" radius={[0, 3, 3, 0]}>
                         {ranked.map((entry, idx) => (

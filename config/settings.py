@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # LLM (OpenRouter)
     openrouter_api_key: str = ""
-    llm_model: str = "google/gemma-3-4b-it:free"
+    llm_model: str = "x-ai/grok-2"
 
     # Voice assistant / Twilio
     twilio_account_sid: str = ""

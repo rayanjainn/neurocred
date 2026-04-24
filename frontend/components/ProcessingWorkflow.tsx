@@ -10,11 +10,11 @@ interface Step {
 }
 
 const STEPS: Step[] = [
-  { id: "ingesting", label: "Tier 1: Ingestion", description: "Parsing GST, UPI and Bank signals" },
-  { id: "classifying", label: "Tier 2: Semantic Classification", description: "Mapping transactions to financial taxonomy" },
-  { id: "extracting_features", label: "Tier 3: Behavioural Feature Extraction", description: "Computing volatility, stability, and discretionary indices" },
-  { id: "benchmarking", label: "Tier 3: Peer Cohort Benchmarking", description: "Comparing against anonymised cohort averages by income and city tier" },
-  { id: "scoring", label: "Tier 4: Cognitive Scoring", description: "Running XGBoost ensemble on feature vectors" },
+  { id: "ingesting", label: "Ingestion", description: "Parsing GST, UPI and Bank signals" },
+  { id: "classifying", label: "Semantic Classification", description: "Mapping transactions to financial taxonomy" },
+  { id: "extracting_features", label: "Behavioral Feature Extraction", description: "Computing volatility, stability, and discretionary indices" },
+  { id: "benchmarking", label: "Peer Cohort Benchmarking", description: "Comparing against anonymized cohort averages by income and city segment" },
+  { id: "scoring", label: "Cognitive Scoring", description: "Running XGBoost ensemble on feature vectors" },
 ];
 
 export function ProcessingWorkflow({ currentStatus }: { currentStatus: ScoreStatus }) {

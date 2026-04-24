@@ -1,5 +1,5 @@
 // ============================================================
-// Central Mock Store — all mock data for MSME Credit Platform
+// Central Mock Store — all mock data for NeuroCred platform
 // ============================================================
 
 // ---- USERS ----

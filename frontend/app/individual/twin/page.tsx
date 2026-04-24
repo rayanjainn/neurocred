@@ -273,7 +273,7 @@ export default function IndividualTwinPage() {
     if (!tw) {
       setStatus("failed");
       setInitError(
-        "Twin could not be initialized yet. Please ensure Tier 1-3 pipeline has produced features for this user, then retry.",
+        "Twin could not be initialized yet. Please ensure the data pipeline has produced features for this user, then retry.",
       );
     } else {
       setStatus("complete");
@@ -689,7 +689,7 @@ export default function IndividualTwinPage() {
       setNegSession(session);
       pushFeed({
         title: "Negotiation started",
-        detail: "Tier 8 intervention agent opened an EMI restructuring session.",
+        detail: "Intervention agent opened an EMI restructuring session.",
         severity: "medium",
       });
     } catch {
@@ -783,7 +783,7 @@ export default function IndividualTwinPage() {
   const chartData = history.map((v: any) => ({
     ver: `v${v.version ?? "?"}`,
     risk: Math.round((v.risk_score ?? 0) * 100),
-    cibil: v.cibil_like_score ?? v.cibil_score ?? 0,
+    credit: v.credit_score ?? v.cibil_like_score ?? v.cibil_score ?? 0,
     ts: v.last_updated ?? v.created_at ?? "",
     persona: v.persona ?? "unknown",
   }));
@@ -885,7 +885,7 @@ export default function IndividualTwinPage() {
                   <ProcessingWorkflow currentStatus={status} />
               </div>
               <p className="mt-8 text-sm text-muted-foreground animate-pulse tracking-wide uppercase">
-                  Tier 3 Trend Engine Online
+                  Trend Engine Online
               </p>
           </div>
         </div>
@@ -935,12 +935,15 @@ export default function IndividualTwinPage() {
       {/* Twin snapshot */}
       {twin && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            { label: "Risk Score", value: `${Math.round((twin.risk_score ?? 0) * 100)}%`, bad: twin.risk_score > 0.5 },
-            { label: "Liquidity Health", value: `${liquidityPct}%`, bad: liquidityPct < 40 },
-            { label: "CIBIL-Like Score", value: twin.cibil_like_score ?? "—", bad: (twin.cibil_like_score ?? 750) < 650 },
-            { label: "Persona", value: twin.persona ?? "—", bad: false },
-          ].map((m) => (
+          {(() => {
+            const displayCreditScore = twin.credit_score ?? twin.cibil_like_score;
+            return [
+              { label: "Risk Score", value: `${Math.round((twin.risk_score ?? 0) * 100)}%`, bad: twin.risk_score > 0.5 },
+              { label: "Liquidity Health", value: `${liquidityPct}%`, bad: liquidityPct < 40 },
+              { label: "Credit Score", value: displayCreditScore ?? "—", bad: (displayCreditScore ?? 750) < 650 },
+              { label: "Persona", value: twin.persona ?? "—", bad: false },
+            ];
+          })().map((m) => (
             <Card key={m.label} className="border-border shadow-sm">
               <CardContent className="p-4">
                 <p className="text-xs text-muted-foreground">{m.label}</p>
@@ -964,7 +967,7 @@ export default function IndividualTwinPage() {
         <TabsContent value="overview" className="space-y-4">
           <ComplianceSnapshotGrid
             userId={user.id}
-            title="Tier 10 · Explainable Audit Repository"
+            title="Explainable Audit Repository"
           />
         </TabsContent>
 
@@ -988,9 +991,9 @@ export default function IndividualTwinPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                       <XAxis dataKey="ver" tick={{ fontSize: 10 }} />
                       <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} />
-                      <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: any, n: string) => [`${v}${n==="cibil"?"":"%"}`, n]} />
+                      <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: any, n: string) => [`${v}${n==="credit"?"":"%"}`, n]} />
                       <Line type="monotone" dataKey="risk" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} name="Risk %" />
-                      <Line type="monotone" dataKey="cibil" stroke="#c8ff00" strokeWidth={2} dot={{ r: 3 }} name="CIBIL-Like" />
+                      <Line type="monotone" dataKey="credit" stroke="#c8ff00" strokeWidth={2} dot={{ r: 3 }} name="Credit Score" />
                     </LineChart>
                   </ResponsiveContainer>
                   <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto pr-1">
@@ -1342,7 +1345,7 @@ export default function IndividualTwinPage() {
                 <Card className="border-border shadow-sm">
                   <CardHeader className="py-3 px-4 border-b">
                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                      <MessageSquare className="w-4 h-4 text-primary" /> Tier 8 Negotiation Console
+                        <MessageSquare className="w-4 h-4 text-primary" /> Negotiation Console
                       {negSession?.status && (
                         <Badge variant="outline" className="text-[10px] ml-auto capitalize">
                           {String(negSession.status).replace(/_/g, " ")}
@@ -1447,7 +1450,7 @@ export default function IndividualTwinPage() {
                 <Card className="border-border shadow-sm">
                   <CardHeader className="py-3 px-4 border-b">
                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                      <Clock3 className="w-4 h-4 text-primary" /> Continuous Tier 8 Monitoring
+                        <Clock3 className="w-4 h-4 text-primary" /> Continuous Monitoring
                       <Badge variant="outline" className="text-[10px] ml-auto">Live Feed</Badge>
                     </CardTitle>
                   </CardHeader>

@@ -462,7 +462,7 @@ export default function MsmeTwinPage() {
       setNegSession(session);
       pushFeed({
         title: "Negotiation started",
-        detail: "Tier 8 intervention agent opened an EMI restructuring session.",
+        detail: "Intervention agent opened an EMI restructuring session.",
         severity: "medium",
       });
     } catch {
@@ -569,7 +569,7 @@ export default function MsmeTwinPage() {
             <td>${escapeHtml(v.ver)}</td>
             <td>${escapeHtml(v.persona)}</td>
             <td>${escapeHtml(`${v.risk}%`)}</td>
-            <td>${escapeHtml(String(v.cibil ?? "-"))}</td>
+            <td>${escapeHtml(String(v.credit ?? "-"))}</td>
             <td>${escapeHtml(fmtTs(v.ts))}</td>
           </tr>
         `,
@@ -783,7 +783,7 @@ export default function MsmeTwinPage() {
             <section>
               <h2>Twin Timeline (Latest 12)</h2>
               ${timelineChartSvg ? `<div class="chart-wrap"><p class="chart-title">Twin Risk Trend</p>${timelineChartSvg}</div>` : ""}
-              ${historyRows ? `<table><thead><tr><th>Version</th><th>Persona</th><th>Risk</th><th>CIBIL-Like</th><th>Timestamp</th></tr></thead><tbody>${historyRows}</tbody></table>` : `<p class="empty">No twin history available.</p>`}
+              ${historyRows ? `<table><thead><tr><th>Version</th><th>Persona</th><th>Risk</th><th>Credit Score</th><th>Timestamp</th></tr></thead><tbody>${historyRows}</tbody></table>` : `<p class="empty">No twin history available.</p>`}
             </section>
 
             <section>
@@ -845,7 +845,7 @@ export default function MsmeTwinPage() {
   const chartData = history.map((v: any) => ({
     ver: `v${v.version ?? "?"}`,
     risk: Math.round((v.risk_score ?? 0) * 100),
-    cibil: v.cibil_like_score ?? 0,
+    credit: v.credit_score ?? v.cibil_like_score ?? 0,
     ts: v.last_updated ?? v.created_at ?? "",
     persona: v.persona ?? "unknown",
   }));
@@ -928,7 +928,7 @@ export default function MsmeTwinPage() {
         <TabsContent value="overview" className="space-y-4">
           <ComplianceSnapshotGrid
             userId={user.id}
-            title="Tier 10 · Explainable Audit Repository"
+            title="Explainable Audit Repository"
           />
         </TabsContent>
 
@@ -952,9 +952,9 @@ export default function MsmeTwinPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                       <XAxis dataKey="ver" tick={{ fontSize: 10 }} />
                       <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} />
-                      <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: any, n: string) => [`${v}${n === "cibil" ? "" : "%"}`, n]} />
+                      <Tooltip contentStyle={{ fontSize: 11 }} formatter={(v: any, n: string) => [`${v}${n === "credit" ? "" : "%"}`, n]} />
                       <Line type="monotone" dataKey="risk" stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} name="Risk %" />
-                      <Line type="monotone" dataKey="cibil" stroke="#c8ff00" strokeWidth={2} dot={{ r: 3 }} name="CIBIL-Like" />
+                      <Line type="monotone" dataKey="credit" stroke="#c8ff00" strokeWidth={2} dot={{ r: 3 }} name="Credit Score" />
                     </LineChart>
                   </ResponsiveContainer>
                   <div className="mt-3 space-y-1.5 max-h-40 overflow-y-auto pr-1">
@@ -1157,7 +1157,7 @@ export default function MsmeTwinPage() {
                 <Card className="border-border shadow-sm">
                   <CardHeader className="py-3 px-4 border-b">
                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                      <MessageSquare className="w-4 h-4 text-primary" /> Tier 8 Negotiation Console
+                        <MessageSquare className="w-4 h-4 text-primary" /> Negotiation Console
                       {negSession?.status && (
                         <Badge variant="outline" className="text-[10px] ml-auto capitalize">
                           {String(negSession.status).replace(/_/g, " ")}
@@ -1279,7 +1279,7 @@ export default function MsmeTwinPage() {
                 <Card className="border-border shadow-sm">
                   <CardHeader className="py-3 px-4 border-b">
                     <CardTitle className="text-sm font-semibold flex items-center gap-2">
-                      <Clock3 className="w-4 h-4 text-primary" /> Continuous Tier 8 Monitoring
+                        <Clock3 className="w-4 h-4 text-primary" /> Continuous Monitoring
                       <Badge variant="outline" className="text-[10px] ml-auto">Live Feed</Badge>
                     </CardTitle>
                   </CardHeader>

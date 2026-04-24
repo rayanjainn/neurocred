@@ -159,7 +159,7 @@ export default function BankMsmePage() {
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <PageHeader
-        title="MSME Credit Profile"
+        title="NeuroCred MSME Profile"
         description={`Loan Request: ${lrId} · ${loan.bank_name}`}
         actions={
           <Button

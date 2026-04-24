@@ -101,7 +101,7 @@ export default function IndividualGuidePage() {
           : selectedTopic === "cgtmse"
             ? "Mock assistant: CGTMSE supports collateral-free MSME loans; eligibility depends on lender policy, business profile, and recent signal quality."
             : `Mock assistant (${language}): this guide is in frontend mock mode. You can continue end-to-end testing without backend.`;
-      // We will skip mock entirely to use the actual featherless API if possible!
+      // We will skip mock entirely to use the actual Groq API if possible.
     }
 
     try {

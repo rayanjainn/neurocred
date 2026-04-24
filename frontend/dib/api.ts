@@ -843,10 +843,83 @@ export const scoreApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  health: () => apiFetch<Record<string, unknown>>("/health"),
+  health: async () => {
+    const [coreRaw, creditRaw] = await Promise.all([
+      apiFetch<Record<string, unknown>>("/health").catch(() => ({})),
+      apiFetch<Record<string, unknown>>("/credit/health").catch(() => ({})),
+    ]);
+    const core = coreRaw as Record<string, unknown>;
+    const credit = creditRaw as Record<string, unknown>;
+
+    const models = (credit["models"] as Record<string, string> | undefined) ?? {};
+    const modelValues = Object.values(models);
+    const modelLoaded =
+      modelValues.length > 0
+        ? modelValues.every((v) => String(v).toLowerCase() === "ok")
+        : Boolean(credit["model_loaded"]);
+
+    const redisConnected =
+      typeof core["redis_connected"] === "boolean"
+        ? Boolean(core["redis_connected"])
+        : String(core["redis"] ?? "").toLowerCase() === "ok";
+
+    const queueDepth = Number(
+      core["worker_queue_depth"] ?? credit["queue_depth"] ?? 0,
+    );
+
+    const usedGb = Number(core["system_ram_used_gb"] ?? 0);
+    const totalGb = Number(core["system_ram_total_gb"] ?? 16);
+
+    return {
+      ...core,
+      ...credit,
+      redis_connected: redisConnected,
+      model_loaded: modelLoaded,
+      worker_queue_depth: Number.isFinite(queueDepth) ? queueDepth : 0,
+      system_ram_used_gb: Number.isFinite(usedGb) ? usedGb : 0,
+      system_ram_total_gb: Number.isFinite(totalGb) && totalGb > 0 ? totalGb : 16,
+      status: String(credit["status"] || core["status"] || "degraded"),
+    } as Record<string, unknown>;
+  },
 };
 
 type Params = Record<string, string | undefined>;
+
+type PdfDownloadResult = {
+  blob: Blob;
+  filename: string;
+};
+
+function parseDownloadFilename(contentDisposition: string | null): string | null {
+  if (!contentDisposition) return null;
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim());
+    } catch {
+      return utf8Match[1].trim();
+    }
+  }
+
+  const basicMatch = contentDisposition.match(/filename="?([^\";]+)"?/i);
+  if (basicMatch?.[1]) return basicMatch[1].trim();
+  return null;
+}
+
+async function readApiErrorMessage(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  if (!text) return `Request failed with status ${res.status}`;
+
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    const detail = parsed.detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+    return text;
+  } catch {
+    return text;
+  }
+}
 
 function buildQs(params?: Params): string {
   if (!params) return "";
@@ -1003,20 +1076,34 @@ export const adminApi = {
     }),
   getTier10Report: (userId: string) =>
     apiFetch<Record<string, unknown>>(`/tier10/report/${userId}?format=json`),
-  downloadTier10ReportPdf: async (userId: string): Promise<Blob> => {
+  downloadTier10ReportPdf: async (userId: string): Promise<PdfDownloadResult> => {
     const token = getToken();
     const headers: HeadersInit = token
-      ? { Authorization: `Bearer ${token}` }
-      : {};
-    const res = await fetch(`${API_BASE}/tier10/report/${userId}?format=pdf`, {
+      ? { Authorization: `Bearer ${token}`, Accept: "application/pdf" }
+      : { Accept: "application/pdf" };
+    const safeUserId = encodeURIComponent(userId);
+    const res = await fetch(`${API_BASE}/tier10/report/${safeUserId}?format=pdf`, {
       method: "GET",
       headers,
+      cache: "no-store",
     });
     if (!res.ok) {
-      const msg = await res.text().catch(() => "Failed to download Tier 10 PDF report");
-      throw new Error(msg || "Failed to download Tier 10 PDF report");
+      throw new Error(await readApiErrorMessage(res));
     }
-    return await res.blob();
+
+    const contentType = (res.headers.get("content-type") || "").toLowerCase();
+    if (!contentType.includes("application/pdf")) {
+      throw new Error("Report response was not a PDF. Please retry.");
+    }
+
+    const filename =
+      parseDownloadFilename(res.headers.get("content-disposition")) ||
+      `neurocred_audit_${userId}_${Date.now()}.pdf`;
+
+    return {
+      blob: await res.blob(),
+      filename,
+    };
   },
 };
 

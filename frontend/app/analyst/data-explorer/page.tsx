@@ -275,7 +275,7 @@ export default function DataExplorerPage() {
                       <div className="w-4 h-4 rounded-full bg-primary/60 animate-ping [animation-delay:0.2s]" />
                       <div className="w-4 h-4 rounded-full bg-primary/30 animate-ping [animation-delay:0.4s]" />
                   </div>
-                  <p className="text-2xl font-bold tracking-tight text-foreground">Assembling 360 Degree View</p>
+                  <p className="text-2xl font-bold tracking-tight text-foreground">Analyzing</p>
                   <p className="text-muted-foreground mt-2 max-w-xs text-center">Parsing longitudinal signals for {selectedGstin}...</p>
               </div>
            ) : (

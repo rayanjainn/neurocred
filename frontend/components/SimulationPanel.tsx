@@ -231,7 +231,7 @@ export function SimulationPanel({ userId, score, compact = false }: SimulationPa
           <CardTitle className="text-sm font-semibold text-[#F0F0F0] flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-[#00F0FF]" />
             Risk Simulation Engine
-            <span className="text-[10px] font-mono text-[#666666] ml-1">Tier 6 · Monte Carlo</span>
+            <span className="text-[10px] font-mono text-[#666666] ml-1">Monte Carlo</span>
           </CardTitle>
           <Button
             size="sm"

@@ -40,7 +40,7 @@ export default function MsmeGuidePage() {
     {
       role: "assistant",
       content:
-        "Namaste! I'm your MSME Credit Assistant. How can I help you today? You can ask about your credit score, GST filing, loan products, or schemes like CGTMSE and MUDRA.",
+        "Namaste! I'm your NeuroCred MSME Assistant. How can I help you today? You can ask about your credit score, GST filing, loan products, or schemes like CGTMSE and MUDRA.",
       timestamp: new Date().toISOString(),
     },
   ]);
@@ -101,7 +101,7 @@ export default function MsmeGuidePage() {
           : selectedTopic === "cgtmse"
             ? "Mock assistant: CGTMSE supports collateral-free MSME loans; eligibility depends on lender policy, business profile, and recent signal quality."
             : `Mock assistant (${language}): this guide is in frontend mock mode. You can continue end-to-end testing without backend.`;
-      // We will skip mock entirely to use the actual featherless API if possible!
+      // We will skip mock entirely to use the actual Groq API if possible.
     }
 
     try {

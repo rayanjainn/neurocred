@@ -1120,9 +1120,9 @@ async def get_explorer_gstins(request: Request) -> list[dict[str, Any]]:
                 g = row.get("gstin")
                 if not g or g in seen:
                     continue
-                # msme entities only for this explorer
-                if not row.get("business_name"):
-                    continue
+                
+                # Check for business_name OR name (crucial for shell companies)
+                label = row.get("business_name") or row.get("name") or f"Entity {g[:6]}"
                 
                 score_val, band = _get_generated_score_and_band(row["profile_type"], row.get("age_months", 24), g)
                 score_row = _GSTIN_SCORES.get(g)
@@ -1137,7 +1137,7 @@ async def get_explorer_gstins(request: Request) -> list[dict[str, Any]]:
                 
                 result.append({
                     "gstin": g,
-                    "business_name": row["business_name"],
+                    "business_name": label,
                     "profile_type": row["profile_type"],
                     "state_code": row.get("state_code", g[:2]),
                     "business_age_months": row.get("age_months", 24),
@@ -1990,42 +1990,145 @@ async def analyst_profile_search(q: str = Query(..., description="Identifier to 
 
 @router.get("/transactions/graph")
 async def get_global_graph() -> dict[str, Any]:
-    nodes = [
-        {"id": gstin, "label": name, "gstin": gstin,
-         "total_volume_inr": 1_500_000 + i * 200_000,
-         "pagerank_score": 0.05 + i * 0.02,
-         "profile_type": "HEALTHY_MSME" if i < 3 else "FRAUD_SHELL"}
-        for i, (gstin, name) in enumerate(_GSTIN_NAMES.items())
-    ]
-    edges = [
-        {"source": "09DCTOP0026R4Z8", "target": "24IEYIC0868X8Z8",
-         "volume_inr": 120000, "transaction_count": 8, "relation": "supplier"},
-        {"source": "24IEYIC0868X8Z8", "target": "33EBRUZ8834L3Z5",
-         "volume_inr": 85000, "transaction_count": 5, "relation": "buyer"},
-        {"source": "33CROIG6321U5Z7", "target": "33JOIZO3432X4Z5",
-         "volume_inr": 450000, "transaction_count": 22, "relation": "circular"},
-    ]
+    p_path = Path("data/raw/user_profiles.parquet")
+    if not p_path.exists():
+        return {"nodes": [], "edges": []}
+    
+    profiles_df = pl.read_parquet(p_path)
+    flagged_users = set(profiles_df.filter(pl.col("circular_ring_id").is_not_null() | (pl.col("profile_type") == "SHELL_CIRCULAR"))["user_id"])
+    
+    # ── Nodes ──
+    nodes = []
+    for row in profiles_df.to_dicts():
+        is_fraud = row["user_id"] in flagged_users
+        nodes.append({
+            "id": row["user_id"],
+            "label": row.get("business_name") or row["name"],
+            "gstin": row.get("gstin"),
+            "total_volume_inr": 1000000 + (hash(row["user_id"]) % 500000),
+            "pagerank_score": 0.05 + (hash(row["user_id"]) % 100) / 1000.0,
+            "profile_type": row["profile_type"],
+            "flagged": is_fraud,
+            "ring_id": row.get("circular_ring_id")
+        })
+    
+    # ── Edges ──
+    # Scan ALL chunks for efficiency using lazy loading
+    upi_to_user = {row["upi_id"]: row["user_id"] for row in profiles_df.select(["upi_id", "user_id"]).to_dicts()}
+    
+    edges = []
+    seen_edges = set()
+    
+    try:
+        # Prioritize edges involving flagged nodes
+        l_df = pl.scan_parquet("data/raw/upi_transactions_chunk_*.parquet")
+        # Filter for txns where at least one side is flagged OR it's a significant sample
+        # For the global graph, we mostly care about the fraud rings
+        fraud_txns = l_df.filter(
+            pl.col("user_id").is_in(list(flagged_users))
+        ).collect().to_dicts()
+        
+        for tx in fraud_txns:
+            src_user = tx["user_id"]
+            dst_upi = tx["counterparty_upi"]
+            dst_user = upi_to_user.get(dst_upi)
+            
+            if dst_user and src_user != dst_user:
+                edge_id = tuple(sorted([src_user, dst_user]))
+                if edge_id not in seen_edges:
+                    src_profile = profiles_df.filter(pl.col("user_id") == src_user).row(0, named=True)
+                    dst_profile = profiles_df.filter(pl.col("user_id") == dst_user).row(0, named=True)
+                    
+                    is_circular = (src_profile.get("circular_ring_id") is not None and 
+                                 src_profile.get("circular_ring_id") == dst_profile.get("circular_ring_id"))
+                    
+                    edges.append({
+                        "source": src_user,
+                        "target": dst_user,
+                        "volume_inr": abs(tx["amount"]),
+                        "transaction_count": 5, # boosted for vis
+                        "relation": "circular" if is_circular else "counterparty"
+                    })
+                    seen_edges.add(edge_id)
+                    if len(edges) > 300: break
+    except Exception as e:
+        print(f"Graph edge scan error: {e}")
+                
     return {"nodes": nodes, "edges": edges}
 
 
 @router.get("/transactions/{gstin}/graph")
 async def get_gstin_graph(gstin: str) -> dict[str, Any]:
-    center_name = _GSTIN_NAMES.get(gstin, f"MSME {gstin[:6]}")
+    # Find user_id from GSTIN
+    profiles_path = Path("data/raw/user_profiles.parquet")
+    if not profiles_path.exists():
+        return {"nodes": [], "edges": []}
+    
+    pdf = pl.read_parquet(profiles_path)
+    target_rows = pdf.filter(pl.col("gstin") == gstin).to_dicts()
+    if not target_rows:
+        return {"nodes": [], "edges": []}
+    
+    target = target_rows[0]
+    user_id = target["user_id"]
+    upi_to_user = {row["upi_id"]: row["user_id"] for row in pdf.select(["upi_id", "user_id"]).to_dicts()}
+    user_to_name = {row["user_id"]: (row.get("business_name") or row["name"]) for row in pdf.to_dicts()}
+    
+    nodes = [{"id": user_id, "label": target.get("business_name") or target["name"], "gstin": gstin, "pagerank_score": 0.15, "flagged": target.get("circular_ring_id") is not None}]
+    edges = []
+    seen_nodes = {user_id}
+    
+    try:
+        # Scan ALL chunks for THIS specific user
+        l_df = pl.scan_parquet("data/raw/upi_transactions_chunk_*.parquet")
+        mytxns = l_df.filter(
+            (pl.col("user_id") == user_id) | 
+            (pl.col("counterparty_upi") == target.get("upi_id"))
+        ).collect().to_dicts()
+        
+        for tx in mytxns:
+            is_outbound = tx["user_id"] == user_id
+            
+            # If outbound, the other party is the counterparty_upi
+            # If inbound (counterparty_upi matches target), the other party is the tx["user_id"]
+            if is_outbound:
+                other_upi = tx["counterparty_upi"]
+                other_user = upi_to_user.get(other_upi)
+            else:
+                other_user = tx["user_id"]
+                other_profile = pdf.filter(pl.col("user_id") == other_user).to_dicts()
+                other_upi = other_profile[0].get("upi_id") if other_profile else "unknown"
+
+            if not other_user or other_user == user_id: continue
+            
+            if other_user not in seen_nodes:
+                other_profile_rows = pdf.filter(pl.col("user_id") == other_user).to_dicts()
+                if other_profile_rows:
+                    op = other_profile_rows[0]
+                    nodes.append({
+                        "id": other_user, 
+                        "label": user_to_name.get(other_user, other_user), 
+                        "gstin": op.get("gstin"),
+                        "pagerank_score": 0.05,
+                        "flagged": op.get("circular_ring_id") is not None
+                    })
+                    seen_nodes.add(other_user)
+            
+            edges.append({
+                "source": user_id if is_outbound else other_user, 
+                "target": other_user if is_outbound else user_id, 
+                "volume_inr": abs(tx["amount"]), 
+                "transaction_count": 1, 
+                "relation": "counterparty"
+            })
+            if len(nodes) > 25: break
+    except Exception as e:
+        print(f"GSTIN graph scan error: {e}")
+
     return {
-        "center": {"id": gstin, "label": center_name},
-        "nodes": [
-            {"id": gstin, "label": center_name, "gstin": gstin, "pagerank_score": 0.08},
-            {"id": "supplier_001", "label": "Raw Materials Co", "gstin": "22SUP001",
-             "pagerank_score": 0.04},
-            {"id": "buyer_001", "label": "Retail Chain", "gstin": "27BUY001",
-             "pagerank_score": 0.06},
-        ],
-        "edges": [
-            {"source": "supplier_001", "target": gstin, "volume_inr": 240000,
-             "transaction_count": 12, "relation": "supplier"},
-            {"source": gstin, "target": "buyer_001", "volume_inr": 310000,
-             "transaction_count": 18, "relation": "buyer"},
-        ],
+        "center": {"id": user_id, "label": target.get("business_name") or target["name"]},
+        "nodes": nodes,
+        "edges": edges
     }
 
 

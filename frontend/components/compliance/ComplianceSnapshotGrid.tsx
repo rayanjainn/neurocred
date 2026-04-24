@@ -47,7 +47,7 @@ function TwinTimelineCard({ userId }: { userId: string }) {
     .map((v: any) => ({
       ver: `v${v.version ?? "?"}`,
       risk: Math.round(Number(v.risk_score ?? 0) * 100),
-      cibil: Number(v.cibil_like_score ?? v.cibil_score ?? 0),
+      credit: Number(v.credit_score ?? v.cibil_like_score ?? v.cibil_score ?? 0),
       ts: String(v.last_updated ?? v.created_at ?? ""),
       persona: String(v.persona ?? "unknown"),
     }))
@@ -70,7 +70,7 @@ function TwinTimelineCard({ userId }: { userId: string }) {
                 <YAxis tick={{ fontSize: 10 }} domain={[0, 100]} />
                 <Tooltip contentStyle={{ fontSize: 11 }} />
                 <Line type="monotone" dataKey="risk" stroke="#ef4444" strokeWidth={2} dot={{ r: 2 }} name="Risk %" />
-                <Line type="monotone" dataKey="cibil" stroke="#c8ff00" strokeWidth={2} dot={{ r: 2 }} name="CIBIL-Like" />
+                <Line type="monotone" dataKey="credit" stroke="#c8ff00" strokeWidth={2} dot={{ r: 2 }} name="Credit Score" />
               </LineChart>
             </ResponsiveContainer>
             <div className="mt-3 space-y-1 max-h-32 overflow-y-auto pr-1">
@@ -335,7 +335,7 @@ function AnomalyHeatmapCard({ userId }: { userId: string }) {
   );
 }
 
-export function ComplianceSnapshotGrid({ userId, title = "Tier 10 Compliance Snapshot" }: { userId: string; title?: string }) {
+export function ComplianceSnapshotGrid({ userId, title = "Compliance Snapshot" }: { userId: string; title?: string }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
